@@ -26,7 +26,7 @@ body.employee-mode .card input,body.employee-mode .card select{min-height:50px}
 <nav id="controls"><button class="active" data-tab="play" onclick="window.location.href='/?employee=1'">📱 직원 참여</button><button data-tab="host" onclick="setTab('host')">🎤 사회자</button><button data-tab="admin" onclick="setTab('admin')">⚙️ 관리자</button></nav><div id="view"></div>
 <p class="footer">D1 연결 전에는 단일 브라우저 데모로 작동합니다. D1 연결 후 라운드와 점수 공유가 가능하지만 퀴즈와 투표는 아직 시연판입니다.</p></main>
 <script>
-const KEY="kpec-idol-prototype-v1",teams=["STAR LAB","DREAM MAKERS","NEON WAVE","NEXT IDOL"],stages=["lobby","quiz","teamwork","idol","showcase","vote","result"],labels=["입장 대기","퀴즈","팀워크","아이돌 제작","쇼케이스","최종 투표","결과 발표"],questions=[{q:"좋은 팀워크의 핵심은?",choices:["혼자 처리하기","의견 듣고 합의하기","눈치 보기","메시지 무시하기"],a:1},{q:"우리 팀 아이돌을 만들 때 가장 먼저 정할 것은?",choices:["콘셉트","프린터","주차 공간","퇴근 시간"],a:0},{q:"2027년 시무식의 가장 중요한 목표는?",choices:["소통과 협력","혼자 점수 모으기","빨리 집에 가기","정답 없음"],a:0}];
+const KEY="kpec-idol-prototype-v1",teams=["STAR LAB","DREAM MAKERS","NEON WAVE","NEXT IDOL"],stages=["lobby","quiz","teamwork","idol","showcase","vote","result"],labels=["입장 대기","퀴즈","팀워크","아이돌 제작","쇼케이스","최종 투표","결과 발표"],questions=[{q:"좋은 팀워크의 핵심은?",choices:["혼자 처리하기","의견 듣고 합의하기","눈치 보기","메시지 무시하기"]},{q:"우리 팀 아이돌을 만들 때 가장 먼저 정할 것은?",choices:["콘셉트","프린터","주차 공간","퇴근 시간"]},{q:"2027년 시무식의 가장 중요한 목표는?",choices:["소통과 협력","혼자 점수 모으기","빨리 집에 가기","정답 없음"]}];
 const fresh=()=>({name:"",team:teams[0],stage:"lobby",answers:{},teamwork:"",idol:{agency:"",group:"",type:"혼성그룹",members:"5",concept:"미래형 사이버",keywords:"도전, 협력, 미래",song:"",slogan:""},submitted:false,voted:false,votes:{},scores:Object.fromEntries(teams.map(t=>[t,0]))});let state;try{state={...fresh(),...JSON.parse(localStorage.getItem(KEY)||"{}")}}catch{state=fresh()}let tab="play",selection=null,employeeOnly=new URLSearchParams(location.search).get("employee")==="1";
 const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])),save=()=>localStorage.setItem(KEY,JSON.stringify(state)),stageLabel=()=>labels[stages.indexOf(state.stage)]||state.stage,view=()=>document.getElementById("view");
 function scores(){return Object.entries(state.scores).sort((a,b)=>b[1]-a[1]).map(([t,n],i)=>'<div class="score"><span>'+(i+1)+'위 · '+esc(t)+'</span><b>'+n+'점</b></div>').join("")}
@@ -126,7 +126,7 @@ function play(){if(!initialStatusLoaded)return '<div class="card"><h2>🎤 행�
  if(status==="waiting")return out+'<p class="notice">사회자의 문제 공개를 기다려 주세요.</p></div>';
  out+='<p class="pill">⏱ <b id="quizCountdown">'+(status==="open"?remaining+"초":quizStatusLabel())+'</b></p>';
  if(answered)out+='<p class="notice">답안 제출 완료! '+(status==="revealed"?"정답을 확인해 주세요.":"사회자의 안내를 기다려 주세요.")+'</p>';
- if(status==="revealed")out+='<p class="notice">✅ 정답: '+esc(q.choices[q.a])+'</p>';
+ if(status==="revealed"&&Number.isInteger(quizControl.correctAnswer))out+='<p class="notice">✅ 정답: '+esc(q.choices[quizControl.correctAnswer])+'</p>';
  if(status==="closed")out+='<p class="notice">답안 제출이 종료됐어요. 정답 공개를 기다려 주세요.</p>';
  out+=q.choices.map((c,k)=>'<button class="option '+(selection===k?"selected":"")+'" onclick="selection='+k+';render()" '+(!canAnswer?"disabled":"")+'>'+(k+1)+'. '+esc(c)+'</button>').join("");
  if(canAnswer)out+='<button id="quizSubmit" class="primary" onclick="submitQuiz()" '+(selection===null||quizSubmitting?"disabled":"")+'>정답 제출</button>';
