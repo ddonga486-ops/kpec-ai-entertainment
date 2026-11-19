@@ -51,8 +51,13 @@ async function sharedState(env){
   // Graceful fallback until the presence migration has run.
   for(const t of teamResults)t.activeParticipants=null;
  }
+ let quizControl=null;
+ try{
+  const row=await env.DB.prepare("SELECT question_index,status,duration_seconds,closes_at FROM quiz_control WHERE id=1").first();
+  if(row)quizControl={questionIndex:row.question_index,status:row.status==="open"&&row.closes_at<=Date.now()?"closed":row.status,durationSeconds:row.duration_seconds,closesAt:row.closes_at};
+ }catch{}
  const registeredTeams=teamResults.filter(t=>t.participants>0).length;
- return {stage:state?.stage||"lobby",revision:state?.revision||0,teams:teamResults,participantCount:teamResults.reduce((n,t)=>n+t.participants,0),registeredTeams,activeCount,activeTeams,updated_at:state?.updated_at||null};
+ return {stage:state?.stage||"lobby",revision:state?.revision||0,teams:teamResults,participantCount:teamResults.reduce((n,t)=>n+t.participants,0),registeredTeams,activeCount,activeTeams,quizControl,updated_at:state?.updated_at||null};
 }
 function allowedOrigin(request){const origin=request.headers.get("origin");return !origin||origin===new URL(request.url).origin}
 export default {
@@ -84,6 +89,43 @@ export default {
   if(url.pathname==="/api/event/status"&&request.method==="GET"){
    if(!env.DB)return json({ready:false,error:"D1 바인딩 DB를 설정해야 합니다."},503);
    try{return json({ready:true,...await sharedState(env)})}catch{return json({ready:false,error:"D1 초기 schema.sql 실행이 필요합니다."},503)}
+  }
+  if(url.pathname==="/api/quiz/control"&&request.method==="POST"){
+   if(!role)return json({error:"사회자 또는 관리자 인증이 필요합니다."},401);
+   if(!env.DB)return json({error:"D1 연결이 필요합니다."},503);
+   let body;try{body=await request.json()}catch{return json({error:"잘못된 요청입니다."},400)}
+   const action=body.action,idx=body.questionIndex,duration=body.durationSeconds;
+   if(!["select","start","reveal","close","next"].includes(action))return json({error:"지원하지 않는 퀴즈 명령입니다."},400);
+   try{
+    const row=await env.DB.prepare("SELECT question_index,status,duration_seconds,closes_at FROM quiz_control WHERE id=1").first();
+    if(!row)return json({error:"migration_004_quiz_control.sql 실행이 필요합니다."},503);
+    let nextIndex=row.question_index,nextStatus=row.status,nextDuration=row.duration_seconds,nextClose=row.closes_at;
+    if(action==="select"){
+     if(!Number.isInteger(idx)||idx<0||idx>2)return json({error:"문제 번호는 1~3만 가능합니다."},400);
+     nextIndex=idx;nextStatus="waiting";nextClose=null;
+    }else if(action==="next"){
+     if(row.question_index>=2)return json({error:"마지막 문제입니다."},409);
+     nextIndex=row.question_index+1;nextStatus="waiting";nextClose=null;
+    }else if(action==="start"){
+     if(!Number.isInteger(duration)||duration<10||duration>180)return json({error:"제한시간은 10~180초로 설정하세요."},400);
+     if(row.status==="open"&&Number(row.closes_at)>Date.now())return json({error:"이미 진행 중입니다."},409);
+     // Disallow reopening questions that already have submitted answers.
+     const attempted=await env.DB.prepare("SELECT COUNT(*) AS n FROM quiz_answers WHERE question_index=?").bind(row.question_index).first();
+     if(attempted?.n>0&&row.status!=="waiting")return json({error:"이미 제출된 문제가 있어 재시작할 수 없습니다. 다음 문제를 선택하세요."},409);
+     nextStatus="open";nextDuration=duration;nextClose=Date.now()+duration*1000;
+    }else if(action==="reveal"){
+     if(row.status!=="closed"&&row.status!=="open"&&row.status!=="revealed")return json({error:"진행 또는 종료된 문제에서만 정답을 공개할 수 있습니다."},409);
+     nextStatus="revealed";nextClose=Date.now();
+    }else if(action==="close"){
+     if(row.status!=="open")return json({error:"진행 중인 문제만 종료할 수 있습니다."},409);
+     nextStatus="closed";nextClose=Date.now();
+    }
+    await env.DB.batch([
+     env.DB.prepare("UPDATE quiz_control SET question_index=?,status=?,duration_seconds=?,closes_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=1").bind(nextIndex,nextStatus,nextDuration,nextClose),
+     env.DB.prepare("UPDATE event_state SET stage='quiz',revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1")
+    ]);
+    return json({ok:true,...await sharedState(env)});
+   }catch{return json({error:"퀴즈 제어 테이블 또는 SQL 실행 상태를 확인하세요."},503)}
   }
   if(url.pathname==="/api/event/stage"&&request.method==="POST"){
    if(!role)return json({error:"MC 또는 관리자 인증이 필요합니다."},401);
@@ -173,6 +215,8 @@ export default {
    try{
     const stage=await env.DB.prepare("SELECT stage FROM event_state WHERE id=1").first();
     if(stage?.stage!=="quiz")return json({error:"현재 퀴즈 진행 중이 아닙니다."},409);
+    const control=await env.DB.prepare("SELECT question_index,status,closes_at FROM quiz_control WHERE id=1").first();
+    if(!control||control.status!=="open"||control.question_index!==q||Number(control.closes_at)<=Date.now())return json({error:"해당 문제의 제출 시간이 종료됐습니다."},409);
     const p=await env.DB.prepare("SELECT id FROM participants WHERE id=?").bind(pid).first();
     if(!p)return json({error:"등록되지 않은 참가자입니다."},403);
     const previous=await env.DB.prepare("SELECT question_index FROM quiz_answers WHERE participant_id=? AND question_index=?").bind(pid,q).first();
