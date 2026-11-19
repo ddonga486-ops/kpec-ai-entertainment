@@ -31,7 +31,7 @@ const fresh=()=>({name:"",team:teams[0],stage:"lobby",answers:{},teamwork:"",ido
 const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])),save=()=>localStorage.setItem(KEY,JSON.stringify(state)),stageLabel=()=>labels[stages.indexOf(state.stage)]||state.stage,view=()=>document.getElementById("view");
 function scores(){return Object.entries(state.scores).sort((a,b)=>b[1]-a[1]).map(([t,n],i)=>'<div class="score"><span>'+(i+1)+'위 · '+esc(t)+'</span><b>'+n+'점</b></div>').join("")}
 function poster(){const i=state.idol;return '<div class="poster"><small>✦ 2027 KPEC DEBUT PROJECT ✦</small><h2>'+esc(i.group||"YOUR IDOL")+'</h2><span>'+esc(i.concept)+' · '+esc(i.members)+'인조 '+esc(i.type)+'</span><p>'+esc(i.slogan||"우리의 무대가 시작된다")+'</p><span class="chip">DEBUT · '+esc(i.song||"NEW BEGINNING")+'</span></div>'}
-let sharedReady=false, lastRevision=-1, liveTeams=[],initialStatusLoaded=false,sharedError="",currentRole=null,participantCount=0,registeredTeams=0,activeCount=null,activeTeams=null,quizSubmitting=false,quizControl=null,adminQuestions=null,adminQuestionIndex=0,adminQuestionBusy=false;
+let sharedReady=false, lastRevision=-1, liveTeams=[],initialStatusLoaded=false,sharedError="",currentRole=null,participantCount=0,registeredTeams=0,activeCount=null,activeTeams=null,quizSubmitting=false,quizControl=null,adminQuestions=null,adminQuestionIndex=0,adminQuestionBusy=false,lastQuestionFingerprint="",pendingRender=false;
 async function setTab(t){
  if(t!=="play"){
   try {
@@ -74,14 +74,20 @@ async function loadShared(){
   }
   const d=await r.json();
   if(!d.ready)throw Error(d.error||"D1 준비 전");
-  const changed=!sharedReady||d.revision!==lastRevision||state.stage!==d.stage;
+  const currentQuestion=d.quizControl?.questionIndex??-1;
+  const fingerprint=(d.stage||"")+"|"+currentQuestion+"|"+JSON.stringify(d.questions||[]);
+  const questionChanged=lastQuestionFingerprint!==fingerprint;
+  if(questionChanged){selection=null;lastQuestionFingerprint=fingerprint}
+  const changed=!sharedReady||d.revision!==lastRevision||state.stage!==d.stage||questionChanged;
   sharedReady=true;initialStatusLoaded=true;sharedError="";
   liveTeams=d.teams||[];participantCount=d.participantCount||0;registeredTeams=d.registeredTeams||0;const prevActive=activeCount;activeCount=d.activeCount;activeTeams=d.activeTeams;quizControl=d.quizControl||null;if(Array.isArray(d.questions)&&d.questions.length===3)questions.splice(0,questions.length,...d.questions);lastRevision=d.revision;
   if(changed||prevActive!==activeCount){
    state.stage=d.stage;
    state.scores=Object.fromEntries(liveTeams.map(t=>[t.name,t.score]));
    save();
-   if(!document.activeElement||!["INPUT","SELECT","TEXTAREA"].includes(document.activeElement.tagName))render();
+   const active=document.activeElement;
+   if(!active||!["INPUT","SELECT","TEXTAREA"].includes(active.tagName)||questionChanged){pendingRender=false;render()}
+   else pendingRender=true;
   }
  }catch(err){
   sharedReady=false;initialStatusLoaded=true;sharedError=err.message;
@@ -107,6 +113,8 @@ async function adjustScore(teamName,delta){
  state.scores=Object.fromEntries(d.teams.map(t=>[t.name,t.score]));lastRevision=d.revision;save();render();
 }
 setInterval(loadShared,3000);
+document.addEventListener("focusout",()=>{if(pendingRender){pendingRender=false;setTimeout(()=>{if(!document.activeElement||!["INPUT","SELECT","TEXTAREA"].includes(document.activeElement.tagName))render()},0)}});
+
 async function generateIdolText(){
  const form=document.getElementById("idol"),button=document.getElementById("generateText");if(!form||!button)return;
  const f=new FormData(form),payload=Object.fromEntries(f.entries());
@@ -196,14 +204,15 @@ function host(){
  return '<div class="grid"><div class="card"><div class="eyebrow">LIVE MC CONTROL</div><h2>🎤 사회자 진행 콘솔</h2>'
  +'<div class="metrics"><div class="metric"><b>'+(activeCount===null?"—":activeCount)+'</b><small>최근 90초 접속 기기</small></div><div class="metric"><b>'+participantCount+'</b><small>누적 참가 등록</small></div><div class="metric"><b>'+registeredTeams+' / '+liveTeams.length+'</b><small>등록 팀 / 개설 팀</small></div></div>'
  +'<p><b>현재 라운드: '+stageLabel()+'</b></p>'
+ +'<label>다음 라운드 선택</label><select id="stage">'+stages.map((v,i)=>'<option value="'+v+'" '+(v===state.stage?"selected":"")+'>'+labels[i]+'</option>').join("")+'</select>'
+ +'<div class="actions"><button id="nextStage" class="primary">▶ 다음 라운드 진행</button><button id="refreshLive">↻ 현황 새로고침</button></div>'
  +'<div style="border:1px solid #ffffff25;border-radius:18px;padding:15px;margin:17px 0"><small class="eyebrow">MISSION 01 · QUIZ DIRECTOR</small><h3>문제 공개·타이머</h3>'
  +'<p>진행: <b>'+quizStatusLabel()+'</b> · 남은 시간: <b id="quizCountdown">'+(quizControl?.status==="open"?quizRemaining()+"초":quizStatusLabel())+'</b></p>'
  +'<label>문제 선택</label><select id="quizQuestion">'+questions.map((q,i)=>'<option value="'+i+'" '+(quizControl?.questionIndex===i?"selected":"")+'>'+(i+1)+'번 · '+esc(q.q)+'</option>').join("")+'</select>'
  +'<label>제한시간 (초)</label><input id="quizDuration" type="number" min="10" max="180" step="1" value="'+(quizControl?.durationSeconds||30)+'">'
  +'<div class="actions"><button id="quizSelect">문제 선택 적용</button><button id="quizStart" class="primary">▶ 문제 공개·타이머 시작</button><button id="quizClose">■ 제출 종료</button><button id="quizReveal">✓ 정답 공개</button><button id="quizNext">다음 문제 준비 →</button></div>'
- +'<p class="muted">문제 공개 전에는 직원이 답을 제출할 수 없어. 제한시간이 지나면 서버에서도 제출을 거절해.</p></div>'
- +'<label>다음 라운드 선택</label><select id="stage">'+stages.map((v,i)=>'<option value="'+v+'" '+(v===state.stage?"selected":"")+'>'+labels[i]+'</option>').join("")+'</select>'
- +'<div class="actions"><button id="nextStage" class="primary">▶ 다음 라운드 진행</button><button id="refreshLive">↻ 현황 새로고침</button></div>'
+ +'<p class="muted">관리자가 수정한 문제는 D1에서 불러옵니다. 문항 변경 시 문제 선택 적용을 눌러 주세요.</p><p class="muted">문제 공개 전에는 직원이 답을 제출할 수 없어. 제한시간이 지나면 서버에서도 제출을 거절해.</p></div>'
+
  +'<p class="muted">직원 화면은 약 3초마다 동기화돼. 최근 90초간 접속 확인한 참가 기기를 활성으로 표시해. 누적 등록과 실제 인원은 다를 수 있어.</p></div>'
  +'<div class="card"><h2>🏆 팀별 현황</h2><p class="muted">퀴즈 3문제 총 30점 만점, 참가 등록 인원 대비 정답률로 점수를 계산해.</p>'
  +liveTeams.map(t=>'<div class="score"><span><b>'+esc(t.name)+'</b><div class="muted">등록 기록 '+t.participants+'건 · 퀴즈 '+t.quizScore+'점</div></span><b>'+t.score+'점</b></div>').join("")
