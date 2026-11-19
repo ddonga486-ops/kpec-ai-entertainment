@@ -261,17 +261,23 @@ export default {
    let body;try{body=await request.json()}catch{return json({error:"Invalid JSON"},400)}
    if(body.confirm!=="RESET_TEST_DATA")return json({error:"초기화 확인 값이 올바르지 않습니다."},400);
    try{
-    // Ordered deletes to preserve foreign-key consistency.
+    // The original quiz_answers table also references participants through a foreign key.
+    // Clear both generations of answers before deleting participant records.
+    // Keep quiz_questions and quiz_questions_dynamic unchanged.
     await env.DB.batch([
      env.DB.prepare("DELETE FROM quiz_answers_dynamic"),
+     env.DB.prepare("DELETE FROM quiz_answers"),
      env.DB.prepare("DELETE FROM idol_projects"),
-     env.DB.prepare("DELETE FROM participants"),
      env.DB.prepare("DELETE FROM score_audit"),
+     env.DB.prepare("DELETE FROM participants"),
      env.DB.prepare("UPDATE teams SET score=0"),
+     env.DB.prepare("UPDATE quiz_control SET question_index=0,status='waiting',duration_seconds=30,closes_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=1"),
      env.DB.prepare("UPDATE event_state SET stage='lobby',revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1")
     ]);
     return json({ok:true,...await sharedState(env)});
-   }catch{return json({error:"초기화에 실패했습니다. quiz_answers_dynamic 테이블이 생성됐는지 확인하세요."},503)}
+   }catch(err){
+    return json({error:"테스트 데이터 초기화 실패: "+String(err?.message||"알 수 없는 DB 오류").slice(0,240)},503)
+   }
   }
   if(url.pathname==="/api/participants/heartbeat"&&request.method==="POST"){
    if(!env.DB)return json({error:"D1 연결 필요"},503);
