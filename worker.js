@@ -137,10 +137,14 @@ export default {
     let nextIndex=row.question_index,nextStatus=row.status,nextDuration=row.duration_seconds,nextClose=row.closes_at;
     if(action==="select"){
      if(!Number.isInteger(idx)||idx<0||idx>2)return json({error:"문제 번호는 1~3만 가능합니다."},400);
-     nextIndex=idx;nextStatus="waiting";nextClose=null;
+     const selectedQuestion=await env.DB.prepare("SELECT duration_seconds FROM quiz_questions WHERE id=?").bind(idx).first();
+     if(!selectedQuestion)return json({error:"선택한 문제가 등록되어 있지 않습니다."},404);
+     nextIndex=idx;nextStatus="waiting";nextDuration=selectedQuestion.duration_seconds;nextClose=null;
     }else if(action==="next"){
      if(row.question_index>=2)return json({error:"마지막 문제입니다."},409);
-     nextIndex=row.question_index+1;nextStatus="waiting";nextClose=null;
+     nextIndex=row.question_index+1;const nextQuestion=await env.DB.prepare("SELECT duration_seconds FROM quiz_questions WHERE id=?").bind(nextIndex).first();
+     if(!nextQuestion)return json({error:"다음 문제를 찾을 수 없습니다."},404);
+     nextStatus="waiting";nextDuration=nextQuestion.duration_seconds;nextClose=null;
     }else if(action==="start"){
      if(!Number.isInteger(duration)||duration<10||duration>180)return json({error:"제한시간은 10~180초로 설정하세요."},400);
      const questionRow=await env.DB.prepare("SELECT id FROM quiz_questions WHERE id=?").bind(row.question_index).first();
