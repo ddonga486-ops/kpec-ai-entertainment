@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0b0c23"><title>직원 참가 | KPEC AI ENTERTAINMENT</title>
+<style>
+:root{color-scheme:dark;--pink:#ff50ad;--blue:#5bc7ff;--purple:#9666ff;--text:#f9f7ff;--sub:#bdc3e6}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 10% 10%,#5b26658c,transparent 35%),radial-gradient(circle at 90% 20%,#18387d91,transparent 40%),#0b0c23;color:var(--text);font:16px/1.6 system-ui,"Apple SD Gothic Neo",sans-serif;min-height:100dvh}header{position:sticky;top:0;z-index:10;background:#0c1027ec;border-bottom:1px solid #ffffff1e;padding:15px 18px;backdrop-filter:blur(12px)}.brand{max-width:540px;margin:auto;display:flex;justify-content:space-between;align-items:center;gap:12px;font-weight:900;letter-spacing:.5px}.brand span{color:#ffd6ec;font-size:11px;letter-spacing:1.5px}main{max-width:540px;margin:auto;padding:22px 16px 85px}.card{background:linear-gradient(145deg,#242746e8,#141832f2);border:1px solid #ffffff25;border-radius:24px;padding:22px;margin:13px 0;box-shadow:0 16px 40px #0003}h1{font-size:clamp(27px,7vw,40px);line-height:1.3;margin:10px 0 16px;letter-spacing:-1px}h2{font-size:24px;line-height:1.3;margin:7px 0 16px}.kicker{font-size:11px;letter-spacing:2px;color:#ffcce5;font-weight:800}.muted{color:var(--sub);font-size:14px}.chips{display:flex;flex-wrap:wrap;gap:8px}.chip{background:#ffffff13;border:1px solid #ffffff24;border-radius:99px;padding:6px 11px;font-size:12px}label{display:block;margin:14px 0 6px;font-size:14px;font-weight:700}input,select{width:100%;padding:14px;border-radius:12px;border:1px solid #8c93d355;background:#0b1230;color:white;font:inherit}button{width:100%;border:1px solid #ffffff30;background:#ffffff12;border-radius:13px;padding:15px 18px;color:white;font:inherit;cursor:pointer;margin:8px 0;text-align:left}button:disabled{opacity:.45}button.primary{background:linear-gradient(100deg,var(--pink),var(--purple),var(--blue));border:0;font-weight:900;text-align:center}.option.selected{background:#563a9f;border-color:#b6a2ff}.notice{background:#71437745;border-left:3px solid var(--pink);padding:15px;border-radius:12px;color:#ffe2f1}.score{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #ffffff22}.poster{padding:30px 15px;min-height:300px;background:linear-gradient(140deg,#ed48ae,#7d54ee,#315fa5);display:flex;align-items:center;justify-content:center;flex-direction:column;border-radius:20px;text-align:center}.poster strong{font-size:clamp(28px,8vw,46px);overflow-wrap:anywhere}.footer{margin-top:24px;font-size:12px;color:#aab0d6}.spinner{height:24px;width:24px;border:3px solid #fff4;border-top-color:#ff9bd5;border-radius:50%;animation:spin 1s linear infinite;margin:10px auto}@keyframes spin{to{transform:rotate(360deg)}}.row{display:flex;align-items:center;justify-content:space-between;gap:12px}#switchTeam{width:auto;margin:0;font-size:12px;padding:7px 10px}#screen{min-height:40vh}select,button{touch-action:manipulation}@media(max-width:380px){.card{padding:18px}header{padding:13px 14px}}
+</style></head>
+<body><header><div class="brand"><div>✦ KPEC AI ENTERTAINMENT</div><span>2027 DEBUT</span></div></header><main><div id="screen" aria-live="polite"><div class="card"><div class="spinner"></div><p style="text-align:center">행사 진행 상태를 불러오는 중...</p></div></div><p class="footer">직원 전용 참가 화면 · 사회자 및 관리자 메뉴는 표시되지 않습니다.</p></main>
+<script>
+const KEY="kpec-employee-play-v1",questions=[{q:"좋은 팀워크의 핵심은?",options:["혼자 처리하기","의견 듣고 합의하기","눈치 보기","메시지 무시하기"]},{q:"우리 팀 아이돌을 만들 때 가장 먼저 정할 것은?",options:["콘셉트","프린터","주차 공간","퇴근 시간"]},{q:"2027년 시무식의 가장 중요한 목표는?",options:["소통과 협력","혼자 점수 모으기","빨리 집에 가기","정답 없음"]}];
+const stages={lobby:"입장 대기",quiz:"퀴즈",teamwork:"팀워크",idol:"아이돌 제작",showcase:"쇼케이스",vote:"투표",result:"결과 발표"};
+let me={};try{me=JSON.parse(localStorage.getItem(KEY)||"{}")}catch{}
+let eventData=null,selected=null,submissionPending=false,loading=false,error="";
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const save=()=>localStorage.setItem(KEY,JSON.stringify(me));
+function shell(inner){document.getElementById("screen").innerHTML=inner}
+function top(){return '<div class="row"><div class="chips"><span class="chip">👤 '+esc(me.name)+'</span><span class="chip">⭐ '+esc(me.teamName)+'</span><span class="chip">'+esc(stages[eventData.stage])+'</span></div><button id="switchTeam" type="button">재입장</button></div>'}
+function show(){
+ if(!eventData){shell('<div class="card"><h2>서버 연결을 확인해 주세요</h2><p class="notice">'+esc(error||"행사 상태를 불러오지 못했습니다.")+'</p><button class="primary" id="retry">다시 연결</button></div>');document.getElementById("retry").onclick=refresh;return}
+ if(!me.participantId){const options=eventData.teams.map(t=>'<option value="'+esc(t.id)+'">'+esc(t.name)+'</option>').join("");shell('<div class="card"><div class="kicker">WELCOME TO YOUR DEBUT</div><h1>우리 팀의 아이돌을<br>데뷔시켜라! ✨</h1><p class="muted">닉네임과 팀을 선택하면 현재 진행 중인 미션에 바로 참여할 수 있어요.</p><form id="join"><label>닉네임</label><input name="name" required maxlength="24" placeholder="예: 고라니"><label>참가할 팀</label><select name="teamId" required>'+options+'</select><button class="primary" type="submit">🎤 참가하기</button></form></div>');document.getElementById("join").onsubmit=join;return}
+ let s=top();const stage=eventData.stage;
+ if(stage==="lobby")s+='<div class="card"><div class="kicker">READY TO DEBUT</div><h1>입장 완료! 🎟️</h1><p>'+esc(me.teamName)+' 팀으로 입장했어.</p><p class="muted">사회자가 미션을 시작하면 이 화면이 자동으로 전환돼.</p><div class="spinner"></div></div>';
+ else if(stage==="quiz"){const idx=Number(me.quizIndex||0);if(idx>=questions.length){s+='<div class="card"><h2>퀴즈 제출 완료 🎉</h2><p class="muted">사회자의 다음 미션을 기다려 줘.</p></div>'}else{const q=questions[idx];s+='<div class="card"><div class="kicker">MISSION 01 · '+(idx+1)+' / '+questions.length+'</div><h2>'+esc(q.q)+'</h2>'+q.options.map((x,i)=>'<button type="button" class="option '+(selected===i?"selected":"")+'" data-opt="'+i+'">'+(i+1)+'. '+esc(x)+'</button>').join("")+'<button type="button" class="primary" id="answer" '+(selected===null?"disabled":"")+'>정답 제출</button><p class="muted">현재 퀴즈 답안은 이 휴대폰에서만 저장돼. 서버 점수 집계는 다음 개발 단계야.</p></div>'}}
+ else if(stage==="teamwork")s+='<div class="card"><div class="kicker">MISSION 02 · TEAMWORK</div><h2>우리 팀의 2027 키워드는?</h2><p class="muted">팀원들과 의견을 나누고 하나를 골라 줘.</p>'+["성장","소통","혁신","행복"].map(x=>'<button type="button" data-word="'+x+'">'+x+'</button>').join("")+'<p class="notice">우리의 선택: '+esc(me.teamwork||"아직 선택하지 않았어")+'</p></div>';
+ else if(stage==="idol"){const i=me.idol||{};s+='<div class="card"><div class="kicker">MISSION 03 · AI IDOL STUDIO</div><h2>아이돌 데뷔 준비</h2><form id="idol"><label>기획사 이름</label><input name="agency" required maxlength="35" value="'+esc(i.agency||"")+'"><label>아이돌 그룹명</label><input name="group" required maxlength="35" value="'+esc(i.group||"")+'"><label>그룹 유형</label><select name="type">'+["혼성그룹","걸그룹","보이그룹"].map(x=>'<option '+(i.type===x?"selected":"")+'>'+x+'</option>').join("")+'</select><label>멤버 수</label><select name="members">'+["3","4","5","6"].map(x=>'<option '+(i.members===x?"selected":"")+'>'+x+'</option>').join("")+'</select><label>콘셉트</label><select name="concept">'+["미래형 사이버","청량","레트로","카리스마","몽환","오피스 코미디"].map(x=>'<option '+(i.concept===x?"selected":"")+'>'+x+'</option>').join("")+'</select><label>키워드</label><input name="keywords" maxlength="100" value="'+esc(i.keywords||"")+'"><label>데뷔곡</label><input name="song" maxlength="45" value="'+esc(i.song||"")+'"><label>슬로건</label><input name="slogan" maxlength="90" value="'+esc(i.slogan||"")+'"><button class="primary" type="submit">✨ 우리 팀 아이돌 저장하기</button></form></div>'+(me.idolSaved?poster(i):"")}
+ else if(stage==="showcase")s+='<div class="card"><div class="kicker">FINAL LIVE</div><h2>데뷔 쇼케이스 🎤</h2>'+(me.idolSaved?poster(me.idol):'<p>우리 팀의 포스터 시안이 아직 없어.</p>')+'</div>';
+ else if(stage==="vote")s+='<div class="card"><h2>인기투표 💗</h2><p class="muted">현재는 투표 UI 시연 단계야. 서버 집계가 연결되기 전까지 투표할 수 없어.</p></div>';
+ else s+='<div class="card"><h2>🏆 최종 순위</h2>'+eventData.teams.slice().sort((a,b)=>b.score-a.score).map((t,i)=>'<div class="score"><span>'+(i+1)+'위 · '+esc(t.name)+'</span><strong>'+t.score+'점</strong></div>').join("")+'</div>';
+ shell(s);
+ const sw=document.getElementById("switchTeam");if(sw)sw.onclick=()=>{if(confirm("팀 참가 정보를 지우고 다시 입장할까요?")){me={};save();show()}};
+ document.querySelectorAll("[data-opt]").forEach(b=>b.onclick=()=>{selected=Number(b.dataset.opt);show()});
+ const a=document.getElementById("answer");if(a)a.onclick=()=>{if(selected===null)return;me.quizIndex=Number(me.quizIndex||0)+1;selected=null;save();show()};
+ document.querySelectorAll("[data-word]").forEach(b=>b.onclick=()=>{me.teamwork=b.dataset.word;save();show()});
+ const form=document.getElementById("idol");if(form)form.onsubmit=saveIdol;
+}
+function poster(i){return '<div class="poster"><small>2027 KPEC DEBUT PROJECT</small><strong>'+esc(i.group||"YOUR IDOL")+'</strong><p>'+esc(i.concept)+' · '+esc(i.members)+'명</p><div class="chip">'+esc(i.slogan||"우리의 무대가 시작된다")+'</div></div><p class="muted">현재 포스터는 이미지 생성 전 임시 시안이야.</p>'}
+async function join(ev){
+ ev.preventDefault();if(submissionPending)return;submissionPending=true;
+ const form=ev.currentTarget,fd=new FormData(form);
+ try{
+  const r=await fetch("/api/participants/join",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({name:fd.get("name"),teamId:fd.get("teamId")})});
+  const d=await r.json();if(!r.ok)throw Error(d.error||"참가 실패");
+  me={name:String(fd.get("name")),teamName:d.teamName,participantId:d.participantId,quizIndex:0};save();show();
+ }catch(e){alert(e.message)}finally{submissionPending=false}
+}
+async function saveIdol(ev){
+ ev.preventDefault();if(submissionPending)return;submissionPending=true;
+ const fd=new FormData(ev.currentTarget),idol=Object.fromEntries(fd.entries());
+ try{
+  const r=await fetch("/api/idol/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({participantId:me.participantId,idol})});
+  const d=await r.json();if(!r.ok)throw Error(d.error||"저장 실패");
+  me.idol=idol;me.idolSaved=true;save();show();
+ }catch(e){alert(e.message)}finally{submissionPending=false}
+}
+async function refresh(){
+ if(loading)return;loading=true;
+ try{
+  const r=await fetch("/api/event/status",{cache:"no-store"});
+  const d=await r.json();if(!r.ok||!d.ready)throw Error(d.error||"데이터베이스 연결 실패");
+  error="";const changed=!eventData||eventData.stage!==d.stage||eventData.revision!==d.revision;
+  const old=eventData?.stage;eventData=d;
+  if(changed){if(old!==d.stage&&d.stage==="quiz"){me.quizIndex=0;selected=null;save()}if(!["INPUT","SELECT","TEXTAREA"].includes(document.activeElement?.tagName||""))show()}
+ }catch(e){error=e.message;if(!eventData)show()}
+ finally{loading=false}
+}
+refresh();setInterval(refresh,3000);
+</script></body></html>
