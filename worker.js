@@ -139,10 +139,11 @@ export default {
     const other=idx+(body.direction==="up"?-1:1);
     if(other<0||other>=rows.length)return json({error:"더 이상 이동할 수 없습니다."},409);
     const a=rows[idx],b=rows[other];
+    const swapSql="UPDATE quiz_questions_dynamic SET question=?,choice_0=?,choice_1=?,choice_2=?,choice_3=?,correct_index=?,duration_seconds=?,updated_at=CURRENT_TIMESTAMP WHERE id=?";
+    const vals=q=>[q.question,q.choice_0,q.choice_1,q.choice_2,q.choice_3,q.correct_index,q.duration_seconds];
     await env.DB.batch([
-     env.DB.prepare("UPDATE quiz_questions_dynamic SET id=99 WHERE id=?").bind(a.id),
-     env.DB.prepare("UPDATE quiz_questions_dynamic SET id=? WHERE id=?").bind(a.id,b.id),
-     env.DB.prepare("UPDATE quiz_questions_dynamic SET id=? WHERE id=99").bind(b.id),
+     env.DB.prepare(swapSql).bind(...vals(b),a.id),
+     env.DB.prepare(swapSql).bind(...vals(a),b.id),
      env.DB.prepare("UPDATE quiz_control SET question_index=0,status='waiting',closes_at=NULL WHERE id=1"),
      env.DB.prepare("UPDATE event_state SET revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1")
     ]);
