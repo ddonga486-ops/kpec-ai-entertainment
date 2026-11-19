@@ -33,8 +33,15 @@ async function sharedState(env){
  try{quiz=(await env.DB.prepare("SELECT p.team_id,SUM(a.points) AS quiz_score,COUNT(*) AS answers FROM quiz_answers a JOIN participants p ON p.id=a.participant_id GROUP BY p.team_id").all()).results||[]}catch{}
  const members=Object.fromEntries((counts.results||[]).map(x=>[x.team_id,Number(x.members)]));
  const quizScores=Object.fromEntries(quiz.map(x=>[x.team_id,Number(x.quiz_score)||0]));
- const teamResults=(teams.results||[]).map(x=>({...x,score:x.score+(quizScores[x.id]||0),baseScore:x.score,quizScore:quizScores[x.id]||0,participants:members[x.id]||0}));
- return {stage:state?.stage||"lobby",revision:state?.revision||0,teams:teamResults,participantCount:teamResults.reduce((n,t)=>n+t.participants,0),updated_at:state?.updated_at||null};
+ // Quiz is normalized to a maximum of 30 points per team (10 for each of 3 questions).
+ // Denominator is the number of registered participants, not the number of submissions.
+ const teamResults=(teams.results||[]).map(x=>{
+  const participantTotal=members[x.id]||0,raw=quizScores[x.id]||0;
+  const quizScore=participantTotal?Math.round(raw*2/participantTotal*10)/10:0;
+  return {...x,score:Math.round((x.score+quizScore)*10)/10,baseScore:x.score,quizScore,quizRawPoints:raw,participants:participantTotal};
+ });
+ const registeredTeams=teamResults.filter(t=>t.participants>0).length;
+ return {stage:state?.stage||"lobby",revision:state?.revision||0,teams:teamResults,participantCount:teamResults.reduce((n,t)=>n+t.participants,0),registeredTeams,updated_at:state?.updated_at||null};
 }
 function allowedOrigin(request){const origin=request.headers.get("origin");return !origin||origin===new URL(request.url).origin}
 export default {
@@ -92,6 +99,24 @@ export default {
     ]);
     return json({ok:true,...await sharedState(env)})
    }catch{return json({error:"점수 저장 실패 — D1 설정을 확인하세요."},503)}
+  }
+  if(url.pathname==="/api/admin/reset-test"&&request.method==="POST"){
+   if(role!=="admin")return json({error:"관리자만 테스트 데이터를 초기화할 수 있습니다."},403);
+   if(!env.DB)return json({error:"D1 연결이 필요합니다."},503);
+   let body;try{body=await request.json()}catch{return json({error:"Invalid JSON"},400)}
+   if(body.confirm!=="RESET_TEST_DATA")return json({error:"초기화 확인 값이 올바르지 않습니다."},400);
+   try{
+    // Ordered deletes to preserve foreign-key consistency.
+    await env.DB.batch([
+     env.DB.prepare("DELETE FROM quiz_answers"),
+     env.DB.prepare("DELETE FROM idol_projects"),
+     env.DB.prepare("DELETE FROM participants"),
+     env.DB.prepare("DELETE FROM score_audit"),
+     env.DB.prepare("UPDATE teams SET score=0"),
+     env.DB.prepare("UPDATE event_state SET stage='lobby',revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1")
+    ]);
+    return json({ok:true,...await sharedState(env)});
+   }catch{return json({error:"초기화에 실패했습니다. quiz_answers 테이블이 생성됐는지 확인하세요."},503)}
   }
   if(url.pathname==="/api/participants/join"&&request.method==="POST"){
    if(!env.DB)return json({error:"D1 바인딩이 없습니다."},503);
