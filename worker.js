@@ -34,6 +34,7 @@ function allowedOrigin(request){const origin=request.headers.get("origin");retur
 export default {
  async fetch(request,env){
   const url=new URL(request.url);
+  if(url.pathname==="/play"||url.pathname==="/play/")return env.ASSETS.fetch(new Request(new URL("/play.html",url),request));
   if(!url.pathname.startsWith("/api/"))return env.ASSETS.fetch(request);
   if(!allowedOrigin(request))return json({error:"Origin rejected"},403);
   const role=await roleOf(request,env);
