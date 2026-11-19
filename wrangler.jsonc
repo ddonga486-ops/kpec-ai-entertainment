@@ -1,7 +1,12 @@
 {
   "name": "kpec-ai-entertainment",
+  "main": "./worker.js",
   "compatibility_date": "2026-11-19",
   "assets": {
-    "directory": "."
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*"
+    ]
   }
 }
