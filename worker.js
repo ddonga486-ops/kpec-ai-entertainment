@@ -54,7 +54,7 @@ async function sharedState(env){
  let quizControl=null;
  try{
   const row=await env.DB.prepare("SELECT question_index,status,duration_seconds,closes_at FROM quiz_control WHERE id=1").first();
-  if(row)quizControl={questionIndex:row.question_index,status:row.status==="open"&&row.closes_at<=Date.now()?"closed":row.status,durationSeconds:row.duration_seconds,closesAt:row.closes_at};
+  if(row){const status=row.status==="open"&&row.closes_at<=Date.now()?"closed":row.status;quizControl={questionIndex:row.question_index,status,durationSeconds:row.duration_seconds,closesAt:row.closes_at};if(status==="revealed")quizControl.correctAnswer=[1,0,0][row.question_index];}
  }catch{}
  const registeredTeams=teamResults.filter(t=>t.participants>0).length;
  return {stage:state?.stage||"lobby",revision:state?.revision||0,teams:teamResults,participantCount:teamResults.reduce((n,t)=>n+t.participants,0),registeredTeams,activeCount,activeTeams,quizControl,updated_at:state?.updated_at||null};
