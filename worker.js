@@ -28,7 +28,13 @@ const stages=new Set(["lobby","quiz","teamwork","idol","showcase","vote","result
 async function sharedState(env){
  const state=await env.DB.prepare("SELECT stage,revision,updated_at FROM event_state WHERE id=1").first();
  const teams=await env.DB.prepare("SELECT id,name,score FROM teams ORDER BY rowid").all();
- return {stage:state?.stage||"lobby",revision:state?.revision||0,teams:teams.results||[],updated_at:state?.updated_at||null};
+ const counts=await env.DB.prepare("SELECT team_id,COUNT(*) AS members FROM participants GROUP BY team_id").all();
+ let quiz=[];
+ try{quiz=(await env.DB.prepare("SELECT p.team_id,SUM(a.points) AS quiz_score,COUNT(*) AS answers FROM quiz_answers a JOIN participants p ON p.id=a.participant_id GROUP BY p.team_id").all()).results||[]}catch{}
+ const members=Object.fromEntries((counts.results||[]).map(x=>[x.team_id,Number(x.members)]));
+ const quizScores=Object.fromEntries(quiz.map(x=>[x.team_id,Number(x.quiz_score)||0]));
+ const teamResults=(teams.results||[]).map(x=>({...x,score:x.score+(quizScores[x.id]||0),baseScore:x.score,quizScore:quizScores[x.id]||0,participants:members[x.id]||0}));
+ return {stage:state?.stage||"lobby",revision:state?.revision||0,teams:teamResults,participantCount:teamResults.reduce((n,t)=>n+t.participants,0),updated_at:state?.updated_at||null};
 }
 function allowedOrigin(request){const origin=request.headers.get("origin");return !origin||origin===new URL(request.url).origin}
 export default {
@@ -99,6 +105,36 @@ export default {
     await env.DB.prepare("INSERT INTO participants(id,team_id,display_name) VALUES (?,?,?)").bind(id,teamId,displayName).run();
     return json({ok:true,participantId:id,teamName:team.name});
    }catch{return json({error:"참가자 저장 실패"},503)}
+  }
+  if(url.pathname==="/api/quiz/progress"&&request.method==="GET"){
+   if(!env.DB)return json({error:"D1 데이터베이스를 연결해주세요."},503);
+   const id=String(url.searchParams.get("participantId")||"");
+   if(!/^[a-f0-9-]{36}$/i.test(id))return json({error:"참가자 정보가 올바르지 않습니다."},400);
+   try{
+    const p=await env.DB.prepare("SELECT id FROM participants WHERE id=?").bind(id).first();
+    if(!p)return json({error:"참가자를 찾을 수 없습니다."},404);
+    const rows=await env.DB.prepare("SELECT question_index,answer_index,points FROM quiz_answers WHERE participant_id=? ORDER BY question_index").bind(id).all();
+    return json({answers:rows.results||[],nextQuestion:(rows.results||[]).length});
+   }catch{return json({error:"퀴즈 테이블을 초기화해 주세요."},503)}
+  }
+  if(url.pathname==="/api/quiz/submit"&&request.method==="POST"){
+   if(!env.DB)return json({error:"D1 데이터베이스를 연결해주세요."},503);
+   let body;try{body=await request.json()}catch{return json({error:"Invalid JSON"},400)}
+   const pid=String(body.participantId||""),q=body.questionIndex,a=body.answerIndex;
+   if(!/^[a-f0-9-]{36}$/i.test(pid)||!Number.isInteger(q)||q<0||q>2||!Number.isInteger(a)||a<0||a>3)return json({error:"답안 값이 잘못되었습니다."},400);
+   try{
+    const stage=await env.DB.prepare("SELECT stage FROM event_state WHERE id=1").first();
+    if(stage?.stage!=="quiz")return json({error:"현재 퀴즈 진행 중이 아닙니다."},409);
+    const p=await env.DB.prepare("SELECT id FROM participants WHERE id=?").bind(pid).first();
+    if(!p)return json({error:"등록되지 않은 참가자입니다."},403);
+    const previous=await env.DB.prepare("SELECT question_index FROM quiz_answers WHERE participant_id=? AND question_index=?").bind(pid,q).first();
+    if(previous)return json({error:"이미 제출한 문제입니다.",duplicate:true},409);
+    const keys=[1,0,0],points=keys[q]===a?5:0;
+    const insert=await env.DB.prepare("INSERT OR IGNORE INTO quiz_answers(participant_id,question_index,answer_index,points) VALUES (?,?,?,?)").bind(pid,q,a,points).run();
+    if(!insert.meta?.changes)return json({error:"이미 제출한 문제입니다.",duplicate:true},409);
+    await env.DB.prepare("UPDATE event_state SET revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1").run();
+    return json({ok:true,points,nextQuestion:q+1});
+   }catch{return json({error:"퀴즈 저장 실패. migration_002_quiz.sql 적용 상태를 확인하세요."},503)}
   }
   if(url.pathname==="/api/idol/project"&&request.method==="POST"){
    if(!env.DB)return json({error:"D1 바인딩이 없습니다."},503);
