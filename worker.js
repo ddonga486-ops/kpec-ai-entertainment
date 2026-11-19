@@ -26,7 +26,7 @@ async function roleOf(request,env){
 }
 const stages=new Set(["lobby","quiz","teamwork","idol","showcase","vote","result"]);
 const quizColumns="id,question,choice_0,choice_1,choice_2,choice_3,correct_index,duration_seconds";
-async function quizRows(env){return (await env.DB.prepare("SELECT "+quizColumns+" FROM quiz_questions ORDER BY id").all()).results||[]}
+async function quizRows(env){return (await env.DB.prepare("SELECT "+quizColumns+" FROM quiz_questions_dynamic ORDER BY id").all()).results||[]}
 const toPublicQuestion=row=>({id:row.id,q:row.question,choices:[row.choice_0,row.choice_1,row.choice_2,row.choice_3],durationSeconds:row.duration_seconds});
 const toAdminQuestion=row=>({...toPublicQuestion(row),correctIndex:row.correct_index});
 
@@ -35,7 +35,7 @@ async function sharedState(env){
  const teams=await env.DB.prepare("SELECT id,name,score FROM teams ORDER BY rowid").all();
  const counts=await env.DB.prepare("SELECT team_id,COUNT(*) AS members FROM participants GROUP BY team_id").all();
  let quiz=[];
- try{quiz=(await env.DB.prepare("SELECT p.team_id,SUM(a.points) AS quiz_score,COUNT(*) AS answers FROM quiz_answers a JOIN participants p ON p.id=a.participant_id GROUP BY p.team_id").all()).results||[]}catch{}
+ try{quiz=(await env.DB.prepare("SELECT p.team_id,SUM(a.points) AS quiz_score,COUNT(*) AS answers FROM quiz_answers_dynamic a JOIN participants p ON p.id=a.participant_id GROUP BY p.team_id").all()).results||[]}catch{}
  const members=Object.fromEntries((counts.results||[]).map(x=>[x.team_id,Number(x.members)]));
  const quizScores=Object.fromEntries(quiz.map(x=>[x.team_id,Number(x.quiz_score)||0]));
  // Quiz is normalized to a maximum of 30 points per team (10 for each of 3 questions).
@@ -61,7 +61,7 @@ async function sharedState(env){
  let quizControl=null;
  try{
   const row=await env.DB.prepare("SELECT question_index,status,duration_seconds,closes_at FROM quiz_control WHERE id=1").first();
-  if(row){const status=row.status==="open"&&row.closes_at<=Date.now()?"closed":row.status;quizControl={questionIndex:row.question_index,status,durationSeconds:row.duration_seconds,closesAt:row.closes_at};if(status==="revealed"){const answerRow=await env.DB.prepare("SELECT correct_index FROM quiz_questions WHERE id=?").bind(row.question_index).first();if(answerRow)quizControl.correctAnswer=answerRow.correct_index;}}
+  if(row){const status=row.status==="open"&&row.closes_at<=Date.now()?"closed":row.status;quizControl={questionIndex:row.question_index,status,durationSeconds:row.duration_seconds,closesAt:row.closes_at};if(status==="revealed"){const answerRow=await env.DB.prepare("SELECT correct_index FROM quiz_questions_dynamic WHERE id=?").bind(row.question_index).first();if(answerRow)quizControl.correctAnswer=answerRow.correct_index;}}
  }catch{}
  const registeredTeams=teamResults.filter(t=>t.participants>0).length;
  return {stage:state?.stage||"lobby",revision:state?.revision||0,teams:teamResults,participantCount:teamResults.reduce((n,t)=>n+t.participants,0),registeredTeams,activeCount,activeTeams,quizControl,questions:publicQuestions,updated_at:state?.updated_at||null};
@@ -101,14 +101,14 @@ export default {
    if(role!=="admin")return json({error:"관리자 인증이 필요합니다."},403);
    if(!env.DB)return json({error:"D1 연결 필요"},503);
    try{return json({questions:(await quizRows(env)).map(toAdminQuestion)})}
-   catch{return json({error:"migration_005_quiz_questions.sql을 먼저 적용해주세요."},503)}
+   catch{return json({error:"migration_006_dynamic_quiz.sql을 먼저 적용해주세요."},503)}
   }
   if(url.pathname==="/api/admin/questions"&&request.method==="POST"){
    if(role!=="admin")return json({error:"문제 편집은 관리자만 가능합니다."},403);
    if(!env.DB)return json({error:"D1 연결 필요"},503);
    let body;try{body=await request.json()}catch{return json({error:"올바르지 않은 요청입니다."},400)}
    const id=body.id,question=body.q,choices=body.choices,correct=body.correctIndex,duration=body.durationSeconds;
-   if(!Number.isInteger(id)||id<0||id>2||typeof question!=="string"||!question.trim()||question.length>180||
+   if(!Number.isInteger(id)||id<0||id>19||typeof question!=="string"||!question.trim()||question.length>180||
       !Array.isArray(choices)||choices.length!==4||choices.some(v=>typeof v!=="string"||!v.trim()||v.length>100)||
       !Number.isInteger(correct)||correct<0||correct>3||!Number.isInteger(duration)||duration<10||duration>180)
      return json({error:"문제(180자 이내), 보기 4개(각 100자 이내), 정답, 제한시간(10~180초)을 확인해주세요."},400);
@@ -116,14 +116,74 @@ export default {
     const control=await env.DB.prepare("SELECT question_index,status,closes_at FROM quiz_control WHERE id=1").first();
     if(control?.question_index===id&&control.status==="open"&&Number(control.closes_at)>Date.now())
       return json({error:"현재 진행 중인 문제는 수정할 수 없습니다. 제출을 먼저 종료하세요."},409);
-    const submitted=await env.DB.prepare("SELECT COUNT(*) AS count FROM quiz_answers WHERE question_index=?").bind(id).first();
+    const submitted=await env.DB.prepare("SELECT COUNT(*) AS count FROM quiz_answers_dynamic WHERE question_index=?").bind(id).first();
     if(Number(submitted?.count)>0)return json({error:"이미 제출된 답안이 있는 문제입니다. 행사 데이터 초기화 후 수정하세요."},409);
-    const result=await env.DB.prepare("UPDATE quiz_questions SET question=?, choice_0=?,choice_1=?,choice_2=?,choice_3=?,correct_index=?,duration_seconds=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+    const result=await env.DB.prepare("UPDATE quiz_questions_dynamic SET question=?, choice_0=?,choice_1=?,choice_2=?,choice_3=?,correct_index=?,duration_seconds=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
       .bind(question.trim(),...choices.map(v=>v.trim()),correct,duration,id).run();
     if(!result.meta?.changes)return json({error:"수정할 문제를 찾지 못했습니다."},404);
     await env.DB.prepare("UPDATE event_state SET revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1").run();
     return json({ok:true,questions:(await quizRows(env)).map(toAdminQuestion)});
-   }catch{return json({error:"문제 저장 실패. quiz_questions 테이블 생성 여부를 확인해주세요."},503)}
+   }catch{return json({error:"문제 저장 실패. quiz_questions_dynamic 테이블 생성 여부를 확인해주세요."},503)}
+  }
+  if(url.pathname==="/api/admin/questions/reorder"&&request.method==="POST"){
+   if(role!=="admin")return json({error:"관리자만 문제 순서를 변경할 수 있습니다."},403);
+   let body;try{body=await request.json()}catch{return json({error:"잘못된 요청입니다."},400)}
+   if(!["up","down"].includes(body.direction)||!Number.isInteger(body.id))return json({error:"잘못된 이동 요청입니다."},400);
+   try{
+    const control=await env.DB.prepare("SELECT status,closes_at FROM quiz_control WHERE id=1").first();
+    if(control?.status==="open"&&Number(control.closes_at)>Date.now())return json({error:"문제 진행 중에는 순서를 변경할 수 없습니다."},409);
+    const used=await env.DB.prepare("SELECT COUNT(*) AS n FROM quiz_answers_dynamic").first();
+    if(used.n)return json({error:"답안이 제출된 상태에서는 순서를 변경할 수 없습니다. 테스트 데이터 초기화 후 다시 시도하세요."},409);
+    const rows=await quizRows(env),idx=rows.findIndex(q=>q.id===body.id);
+    if(idx<0)return json({error:"문제를 찾지 못했습니다."},404);
+    const other=idx+(body.direction==="up"?-1:1);
+    if(other<0||other>=rows.length)return json({error:"더 이상 이동할 수 없습니다."},409);
+    const a=rows[idx],b=rows[other];
+    await env.DB.batch([
+     env.DB.prepare("UPDATE quiz_questions_dynamic SET id=99 WHERE id=?").bind(a.id),
+     env.DB.prepare("UPDATE quiz_questions_dynamic SET id=? WHERE id=?").bind(a.id,b.id),
+     env.DB.prepare("UPDATE quiz_questions_dynamic SET id=? WHERE id=99").bind(b.id),
+     env.DB.prepare("UPDATE quiz_control SET question_index=0,status='waiting',closes_at=NULL WHERE id=1"),
+     env.DB.prepare("UPDATE event_state SET revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1")
+    ]);
+    return json({ok:true,questions:(await quizRows(env)).map(toAdminQuestion)})
+   }catch{return json({error:"순서 변경에 실패했습니다. 데이터베이스 이전 상태를 확인하세요."},503)}
+  }
+  if(url.pathname==="/api/admin/questions/add"&&request.method==="POST"){
+   if(role!=="admin")return json({error:"관리자만 문제를 추가할 수 있습니다."},403);
+   try{
+    const control=await env.DB.prepare("SELECT status,closes_at FROM quiz_control WHERE id=1").first();
+    if(control?.status==="open"&&Number(control.closes_at)>Date.now())return json({error:"진행 중에는 문제를 추가할 수 없습니다."},409);
+    const used=await env.DB.prepare("SELECT COUNT(*) AS n FROM quiz_answers_dynamic").first();
+    if(used.n)return json({error:"이미 제출된 답안이 있습니다. 테스트 데이터를 초기화한 뒤 문제를 추가하세요."},409);
+    const rows=await quizRows(env);
+    if(rows.length>=20)return json({error:"퀴즈는 최대 20문제까지 가능합니다."},409);
+    const id=rows.length;
+    await env.DB.prepare("INSERT INTO quiz_questions_dynamic(id,question,choice_0,choice_1,choice_2,choice_3,correct_index,duration_seconds) VALUES (?,?,?,?,?,?,?,?)")
+      .bind(id,"새 퀴즈 문제 "+(id+1),"보기 1","보기 2","보기 3","보기 4",0,30).run();
+    await env.DB.prepare("UPDATE event_state SET revision=revision+1 WHERE id=1").run();
+    return json({ok:true,questions:(await quizRows(env)).map(toAdminQuestion)})
+   }catch{return json({error:"문제 추가 실패. migration_006_dynamic_quiz.sql을 확인하세요."},503)}
+  }
+  if(url.pathname==="/api/admin/questions/delete"&&request.method==="POST"){
+   if(role!=="admin")return json({error:"관리자만 문제를 삭제할 수 있습니다."},403);
+   let body;try{body=await request.json()}catch{return json({error:"잘못된 요청입니다."},400)}
+   if(!Number.isInteger(body.id))return json({error:"문제 번호가 올바르지 않습니다."},400);
+   try{
+    const control=await env.DB.prepare("SELECT status,closes_at FROM quiz_control WHERE id=1").first();
+    if(control?.status==="open"&&Number(control.closes_at)>Date.now())return json({error:"진행 중에는 문제를 삭제할 수 없습니다."},409);
+    const used=await env.DB.prepare("SELECT COUNT(*) AS n FROM quiz_answers_dynamic").first();
+    if(used.n)return json({error:"답안이 존재하는 동안 문제를 삭제할 수 없습니다. 테스트 데이터를 초기화해야 합니다."},409);
+    const rows=await quizRows(env);
+    if(rows.length<=1)return json({error:"최소 1개의 문제는 유지해야 합니다."},409);
+    if(!rows.some(q=>q.id===body.id))return json({error:"문제를 찾지 못했습니다."},404);
+    const statements=[env.DB.prepare("DELETE FROM quiz_questions_dynamic WHERE id=?").bind(body.id)];
+    for(const row of rows.filter(x=>x.id>body.id))statements.push(env.DB.prepare("UPDATE quiz_questions_dynamic SET id=? WHERE id=?").bind(row.id-1,row.id));
+    statements.push(env.DB.prepare("UPDATE quiz_control SET question_index=0,status='waiting',closes_at=NULL WHERE id=1"));
+    statements.push(env.DB.prepare("UPDATE event_state SET revision=revision+1 WHERE id=1"));
+    await env.DB.batch(statements);
+    return json({ok:true,questions:(await quizRows(env)).map(toAdminQuestion)})
+   }catch{return json({error:"문제 삭제에 실패했습니다."},503)}
   }
   if(url.pathname==="/api/quiz/control"&&request.method==="POST"){
    if(!role)return json({error:"사회자 또는 관리자 인증이 필요합니다."},401);
@@ -136,22 +196,22 @@ export default {
     if(!row)return json({error:"migration_004_quiz_control.sql 실행이 필요합니다."},503);
     let nextIndex=row.question_index,nextStatus=row.status,nextDuration=row.duration_seconds,nextClose=row.closes_at;
     if(action==="select"){
-     if(!Number.isInteger(idx)||idx<0||idx>2)return json({error:"문제 번호는 1~3만 가능합니다."},400);
-     const selectedQuestion=await env.DB.prepare("SELECT duration_seconds FROM quiz_questions WHERE id=?").bind(idx).first();
+     if(!Number.isInteger(idx)||idx<0||idx>=((await quizRows(env)).length))return json({error:"유효하지 않은 문제 번호입니다."},400);
+     const selectedQuestion=await env.DB.prepare("SELECT duration_seconds FROM quiz_questions_dynamic WHERE id=?").bind(idx).first();
      if(!selectedQuestion)return json({error:"선택한 문제가 등록되어 있지 않습니다."},404);
      nextIndex=idx;nextStatus="waiting";nextDuration=selectedQuestion.duration_seconds;nextClose=null;
     }else if(action==="next"){
-     if(row.question_index>=2)return json({error:"마지막 문제입니다."},409);
-     nextIndex=row.question_index+1;const nextQuestion=await env.DB.prepare("SELECT duration_seconds FROM quiz_questions WHERE id=?").bind(nextIndex).first();
+     if(row.question_index>=((await quizRows(env)).length-1))return json({error:"마지막 문제입니다."},409);
+     nextIndex=row.question_index+1;const nextQuestion=await env.DB.prepare("SELECT duration_seconds FROM quiz_questions_dynamic WHERE id=?").bind(nextIndex).first();
      if(!nextQuestion)return json({error:"다음 문제를 찾을 수 없습니다."},404);
      nextStatus="waiting";nextDuration=nextQuestion.duration_seconds;nextClose=null;
     }else if(action==="start"){
      if(!Number.isInteger(duration)||duration<10||duration>180)return json({error:"제한시간은 10~180초로 설정하세요."},400);
-     const questionRow=await env.DB.prepare("SELECT id FROM quiz_questions WHERE id=?").bind(row.question_index).first();
+     const questionRow=await env.DB.prepare("SELECT id FROM quiz_questions_dynamic WHERE id=?").bind(row.question_index).first();
      if(!questionRow)return json({error:"등록된 퀴즈 문제가 없습니다."},409);
      if(row.status==="open"&&Number(row.closes_at)>Date.now())return json({error:"이미 진행 중입니다."},409);
      // Disallow reopening questions that already have submitted answers.
-     const attempted=await env.DB.prepare("SELECT COUNT(*) AS n FROM quiz_answers WHERE question_index=?").bind(row.question_index).first();
+     const attempted=await env.DB.prepare("SELECT COUNT(*) AS n FROM quiz_answers_dynamic WHERE question_index=?").bind(row.question_index).first();
      if(attempted?.n>0&&row.status!=="waiting")return json({error:"이미 제출된 문제가 있어 재시작할 수 없습니다. 다음 문제를 선택하세요."},409);
      nextStatus="open";nextDuration=duration;nextClose=Date.now()+duration*1000;
     }else if(action==="reveal"){
@@ -202,7 +262,7 @@ export default {
    try{
     // Ordered deletes to preserve foreign-key consistency.
     await env.DB.batch([
-     env.DB.prepare("DELETE FROM quiz_answers"),
+     env.DB.prepare("DELETE FROM quiz_answers_dynamic"),
      env.DB.prepare("DELETE FROM idol_projects"),
      env.DB.prepare("DELETE FROM participants"),
      env.DB.prepare("DELETE FROM score_audit"),
@@ -210,7 +270,7 @@ export default {
      env.DB.prepare("UPDATE event_state SET stage='lobby',revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1")
     ]);
     return json({ok:true,...await sharedState(env)});
-   }catch{return json({error:"초기화에 실패했습니다. quiz_answers 테이블이 생성됐는지 확인하세요."},503)}
+   }catch{return json({error:"초기화에 실패했습니다. quiz_answers_dynamic 테이블이 생성됐는지 확인하세요."},503)}
   }
   if(url.pathname==="/api/participants/heartbeat"&&request.method==="POST"){
    if(!env.DB)return json({error:"D1 연결 필요"},503);
@@ -244,7 +304,7 @@ export default {
    try{
     const p=await env.DB.prepare("SELECT id FROM participants WHERE id=?").bind(id).first();
     if(!p)return json({error:"참가자를 찾을 수 없습니다."},404);
-    const rows=await env.DB.prepare("SELECT question_index,answer_index,points FROM quiz_answers WHERE participant_id=? ORDER BY question_index").bind(id).all();
+    const rows=await env.DB.prepare("SELECT question_index,answer_index,points FROM quiz_answers_dynamic WHERE participant_id=? ORDER BY question_index").bind(id).all();
     return json({answers:rows.results||[],nextQuestion:(rows.results||[]).length});
    }catch{return json({error:"퀴즈 테이블을 초기화해 주세요."},503)}
   }
@@ -252,7 +312,7 @@ export default {
    if(!env.DB)return json({error:"D1 데이터베이스를 연결해주세요."},503);
    let body;try{body=await request.json()}catch{return json({error:"Invalid JSON"},400)}
    const pid=String(body.participantId||""),q=body.questionIndex,a=body.answerIndex;
-   if(!/^[a-f0-9-]{36}$/i.test(pid)||!Number.isInteger(q)||q<0||q>2||!Number.isInteger(a)||a<0||a>3)return json({error:"답안 값이 잘못되었습니다."},400);
+   if(!/^[a-f0-9-]{36}$/i.test(pid)||!Number.isInteger(q)||q<0||q>19||!Number.isInteger(a)||a<0||a>3)return json({error:"답안 값이 잘못되었습니다."},400);
    try{
     const stage=await env.DB.prepare("SELECT stage FROM event_state WHERE id=1").first();
     if(stage?.stage!=="quiz")return json({error:"현재 퀴즈 진행 중이 아닙니다."},409);
@@ -260,16 +320,16 @@ export default {
     if(!control||control.status!=="open"||control.question_index!==q||Number(control.closes_at)<=Date.now())return json({error:"해당 문제의 제출 시간이 종료됐습니다."},409);
     const p=await env.DB.prepare("SELECT id FROM participants WHERE id=?").bind(pid).first();
     if(!p)return json({error:"등록되지 않은 참가자입니다."},403);
-    const previous=await env.DB.prepare("SELECT question_index FROM quiz_answers WHERE participant_id=? AND question_index=?").bind(pid,q).first();
+    const previous=await env.DB.prepare("SELECT question_index FROM quiz_answers_dynamic WHERE participant_id=? AND question_index=?").bind(pid,q).first();
     if(previous)return json({error:"이미 제출한 문제입니다.",duplicate:true},409);
-    const questionRow=await env.DB.prepare("SELECT correct_index FROM quiz_questions WHERE id=?").bind(q).first();
+    const questionRow=await env.DB.prepare("SELECT correct_index FROM quiz_questions_dynamic WHERE id=?").bind(q).first();
     if(!questionRow)return json({error:"퀴즈 문제를 찾지 못했습니다."},404);
     const points=questionRow.correct_index===a?5:0;
-    const insert=await env.DB.prepare("INSERT OR IGNORE INTO quiz_answers(participant_id,question_index,answer_index,points) VALUES (?,?,?,?)").bind(pid,q,a,points).run();
+    const insert=await env.DB.prepare("INSERT OR IGNORE INTO quiz_answers_dynamic(participant_id,question_index,answer_index,points) VALUES (?,?,?,?)").bind(pid,q,a,points).run();
     if(!insert.meta?.changes)return json({error:"이미 제출한 문제입니다.",duplicate:true},409);
     await env.DB.prepare("UPDATE event_state SET revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1").run();
     return json({ok:true,points,nextQuestion:q+1});
-   }catch{return json({error:"퀴즈 저장 실패. migration_002_quiz.sql 적용 상태를 확인하세요."},503)}
+   }catch{return json({error:"퀴즈 저장 실패. migration_006_dynamic_quiz.sql 적용 상태를 확인하세요."},503)}
   }
   if(url.pathname==="/api/idol/project"&&request.method==="POST"){
    if(!env.DB)return json({error:"D1 바인딩이 없습니다."},503);
