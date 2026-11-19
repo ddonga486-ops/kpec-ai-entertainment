@@ -1,0 +1,1 @@
+ALTER TABLE idol_projects ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
