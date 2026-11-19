@@ -80,7 +80,7 @@ async function loadShared(){
   if(questionChanged){selection=null;lastQuestionFingerprint=fingerprint}
   const changed=!sharedReady||d.revision!==lastRevision||state.stage!==d.stage||questionChanged;
   sharedReady=true;initialStatusLoaded=true;sharedError="";
-  liveTeams=d.teams||[];participantCount=d.participantCount||0;registeredTeams=d.registeredTeams||0;const prevActive=activeCount;activeCount=d.activeCount;activeTeams=d.activeTeams;quizControl=d.quizControl||null;if(Array.isArray(d.questions)&&d.questions.length===3)questions.splice(0,questions.length,...d.questions);lastRevision=d.revision;
+  liveTeams=d.teams||[];participantCount=d.participantCount||0;registeredTeams=d.registeredTeams||0;const prevActive=activeCount;activeCount=d.activeCount;activeTeams=d.activeTeams;quizControl=d.quizControl||null;if(Array.isArray(d.questions)&&d.questions.length)questions.splice(0,questions.length,...d.questions);lastRevision=d.revision;
   if(changed||prevActive!==activeCount){
    state.stage=d.stage;
    state.scores=Object.fromEntries(liveTeams.map(t=>[t.name,t.score]));
@@ -173,18 +173,38 @@ async function loadAdminQuestions(){
  }catch(e){adminQuestions=null;alert(e.message)}
 }
 function questionEditor(){
- if(!Array.isArray(adminQuestions)||adminQuestions.length!==3)
+ if(!Array.isArray(adminQuestions)||!adminQuestions.length)
   return '<div class="card"><h2>📝 퀴즈 문제 관리</h2><p class="muted">문제 편집 테이블이 준비되지 않았습니다.</p><button id="reloadQuestions">다시 불러오기</button></div>';
  const q=adminQuestions[adminQuestionIndex];
  return '<div class="card"><div class="eyebrow">QUIZ QUESTION MANAGER</div><h2>📝 퀴즈 문제 편집</h2>'
  +'<p class="muted">관리자 전용 · 문항별 질문, 4개 보기, 정답, 제한시간을 저장할 수 있습니다.</p>'
+ +'<div class="actions"><button id="addQuizQuestion" type="button">＋ 문제 추가</button><button id="moveQuestionUp" type="button">↑ 위로</button><button id="moveQuestionDown" type="button">↓ 아래로</button><button id="deleteQuizQuestion" type="button">🗑 삭제</button></div>'
  +'<div class="actions">'+adminQuestions.map((item,i)=>'<button data-edit-question="'+i+'" '+(i===adminQuestionIndex?'class="primary"':'')+'>'+(i+1)+'번 문제</button>').join("")+'</div>'
  +'<form id="questionEdit"><label>질문</label><textarea name="q" rows="3" maxlength="180" required>'+esc(q.q)+'</textarea>'
  +q.choices.map((choice,i)=>'<label>'+(i+1)+'번 보기</label><input name="choice'+i+'" maxlength="100" required value="'+esc(choice)+'">').join("")
  +'<label>정답 보기</label><select name="correctIndex">'+q.choices.map((_,i)=>'<option value="'+i+'" '+(q.correctIndex===i?'selected':'')+'>'+(i+1)+'번 보기</option>').join("")+'</select>'
  +'<label>기본 제한시간 (초)</label><input name="durationSeconds" type="number" min="10" max="180" step="1" required value="'+q.durationSeconds+'">'
  +'<button class="primary" type="submit" '+(adminQuestionBusy?'disabled':'')+'>💾 문제 저장</button></form>'
- +'<p class="muted">현재 진행 중이거나 이미 답안이 제출된 문제는 변경할 수 없습니다. 문제 내용은 저장 후 직원·사회자 화면에 자동 반영됩니다.</p></div>';
+ +'<p class="muted">문제는 최대 20개까지 만들 수 있어. 순서 변경·삭제·추가는 제출 답안이 없는 상태에서만 가능해.</p></div>';
+}
+async function manageQuestion(action){
+ if(!Array.isArray(adminQuestions)||adminQuestionBusy)return;
+ if(action==="delete"&&!confirm((adminQuestionIndex+1)+"번 문제를 삭제할까요?"))return;
+ if(["up","down","delete"].includes(action)&&document.getElementById("questionEdit")&&!confirm("저장하지 않은 편집 내용은 사라집니다. 계속할까요?"))return;
+ adminQuestionBusy=true;
+ const url="/api/admin/questions/"+(action==="up"||action==="down"?"reorder":action);
+ const body=action==="up"||action==="down"?{id:adminQuestionIndex,direction:action}:action==="delete"?{id:adminQuestionIndex}:{};
+ try{
+  const r=await fetch(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+  const d=await r.json();if(!r.ok)throw Error(d.error||"문제 관리 실패");
+  adminQuestions=d.questions||[];
+  if(action==="add")adminQuestionIndex=adminQuestions.length-1;
+  else if(action==="delete")adminQuestionIndex=Math.min(adminQuestionIndex,adminQuestions.length-1);
+  else adminQuestionIndex+=action==="up"?-1:1;
+  lastRevision=-1;
+  await loadShared();render();
+ }catch(e){alert(e.message)}
+ finally{adminQuestionBusy=false}
 }
 async function saveQuestion(e){
  e.preventDefault();if(adminQuestionBusy)return;
@@ -214,7 +234,7 @@ function host(){
  +'<p class="muted">관리자가 수정한 문제는 D1에서 불러옵니다. 문항 변경 시 문제 선택 적용을 눌러 주세요.</p><p class="muted">문제 공개 전에는 직원이 답을 제출할 수 없어. 제한시간이 지나면 서버에서도 제출을 거절해.</p></div>'
 
  +'<p class="muted">직원 화면은 약 3초마다 동기화돼. 최근 90초간 접속 확인한 참가 기기를 활성으로 표시해. 누적 등록과 실제 인원은 다를 수 있어.</p></div>'
- +'<div class="card"><h2>🏆 팀별 현황</h2><p class="muted">퀴즈 3문제 총 30점 만점, 참가 등록 인원 대비 정답률로 점수를 계산해.</p>'
+ +'<div class="card"><h2>🏆 팀별 현황</h2><p class="muted">총 '+questions.length+'문제 · 팀원별 정답률에 따라 점수를 반영해.</p>'
  +liveTeams.map(t=>'<div class="score"><span><b>'+esc(t.name)+'</b><div class="muted">등록 기록 '+t.participants+'건 · 퀴즈 '+t.quizScore+'점</div></span><b>'+t.score+'점</b></div>').join("")
  +'</div></div>';
 }
@@ -249,7 +269,7 @@ async function submitQuiz(){
 }
 function render(){if(employeeOnly)tab="play";document.querySelectorAll("[data-tab]").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));view().innerHTML=(tab==="play"?play():tab==="host"?host():admin())+(tab!=="play"?'<div class="actions" style="margin:12px 0"><span class="pill">접속 권한: '+esc(currentRole==="admin"?"관리자":currentRole==="mc"?"사회자":"확인 중")+'</span><button id="roleLogout">🔒 로그아웃 / 역할 전환</button><span class="pill">'+(sharedReady?"🟢 D1 연결":"🔴 D1 확인 필요")+'</span></div>':"");let logout=document.getElementById("roleLogout");if(logout)logout.onclick=logoutRole;let qe=document.getElementById("questionEdit");if(qe)qe.onsubmit=saveQuestion;
 document.querySelectorAll("[data-edit-question]").forEach(b=>b.onclick=()=>{if(document.getElementById("questionEdit")&&!confirm("저장하지 않은 입력 내용은 사라집니다. 다른 문제로 이동할까요?"))return;adminQuestionIndex=Number(b.dataset.editQuestion);render()});
-let rq=document.getElementById("reloadQuestions");if(rq)rq.onclick=async()=>{await loadAdminQuestions();render()};let ai=document.getElementById("generateText");if(ai)ai.onclick=generateIdolText;let j=document.getElementById("join");
+let rq=document.getElementById("reloadQuestions");if(rq)rq.onclick=async()=>{await loadAdminQuestions();render()};for(const [id,action] of [["addQuizQuestion","add"],["deleteQuizQuestion","delete"],["moveQuestionUp","up"],["moveQuestionDown","down"]]){const b=document.getElementById(id);if(b)b.onclick=()=>manageQuestion(action)};let ai=document.getElementById("generateText");if(ai)ai.onclick=generateIdolText;let j=document.getElementById("join");
 if(j)j.onsubmit=async ev=>{
  ev.preventDefault();
  const f=new FormData(j),name=String(f.get("name")||"").trim(),teamName=String(f.get("team")||"");
