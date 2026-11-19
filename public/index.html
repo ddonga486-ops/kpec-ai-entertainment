@@ -31,7 +31,7 @@ const fresh=()=>({name:"",team:teams[0],stage:"lobby",answers:{},teamwork:"",ido
 const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])),save=()=>localStorage.setItem(KEY,JSON.stringify(state)),stageLabel=()=>labels[stages.indexOf(state.stage)]||state.stage,view=()=>document.getElementById("view");
 function scores(){return Object.entries(state.scores).sort((a,b)=>b[1]-a[1]).map(([t,n],i)=>'<div class="score"><span>'+(i+1)+'위 · '+esc(t)+'</span><b>'+n+'점</b></div>').join("")}
 function poster(){const i=state.idol;return '<div class="poster"><small>✦ 2027 KPEC DEBUT PROJECT ✦</small><h2>'+esc(i.group||"YOUR IDOL")+'</h2><span>'+esc(i.concept)+' · '+esc(i.members)+'인조 '+esc(i.type)+'</span><p>'+esc(i.slogan||"우리의 무대가 시작된다")+'</p><span class="chip">DEBUT · '+esc(i.song||"NEW BEGINNING")+'</span></div>'}
-let sharedReady=false, lastRevision=-1, liveTeams=[],initialStatusLoaded=false,sharedError="",currentRole=null,participantCount=0,registeredTeams=0,activeCount=null,activeTeams=null,quizSubmitting=false,quizControl=null,adminQuestions=null,adminQuestionIndex=0,adminQuestionBusy=false,lastQuestionFingerprint="",pendingRender=false;
+let sharedReady=false, lastRevision=-1, liveTeams=[],initialStatusLoaded=false,sharedError="",currentRole=null,participantCount=0,registeredTeams=0,activeCount=null,activeTeams=null,quizSubmitting=false,quizControl=null,adminQuestions=null,adminQuestionIndex=0,adminQuestionBusy=false,lastQuestionFingerprint="",pendingRender=false,idolVersion=0,idolDirty=false,idolSyncBusy=false,idolNotice="";
 async function setTab(t){
  if(t!=="play"){
   try {
@@ -62,6 +62,25 @@ async function heartbeat(){
 }
 setInterval(heartbeat,30000);
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")heartbeat()});
+async function loadTeamIdol(force=false){
+ if(!state.participantId||!sharedReady||!["idol","showcase"].includes(state.stage)||idolSyncBusy)return;
+ if(idolDirty&&!force)return;
+ idolSyncBusy=true;
+ try{
+  const r=await fetch("/api/idol/team?participantId="+encodeURIComponent(state.participantId),{cache:"no-store"});
+  const d=await r.json();
+  if(!r.ok)throw Error(d.error||"팀 프로젝트를 불러오지 못했습니다.");
+  if(force||d.version!==idolVersion){
+   idolVersion=d.version||0;
+   if(d.project){state.idol={...state.idol,...d.project};state.submitted=true}
+   else state.submitted=false;
+   save();idolNotice=d.project?"팀 최신 기획안 동기화 완료":"아직 저장된 팀 기획안이 없어요.";
+   if(!idolDirty||force)render();
+  }
+ }catch(e){idolNotice=e.message}
+ finally{idolSyncBusy=false}
+}
+setInterval(()=>loadTeamIdol(),5000);
 async function loadShared(){
  try{
   const r=await fetch("/api/event/status",{cache:"no-store"});
@@ -78,6 +97,7 @@ async function loadShared(){
   const fingerprint=(d.stage||"")+"|"+currentQuestion+"|"+JSON.stringify(d.questions||[]);
   const questionChanged=lastQuestionFingerprint!==fingerprint;
   if(questionChanged){selection=null;lastQuestionFingerprint=fingerprint}
+  const stageChanged=state.stage!==d.stage;
   const changed=!sharedReady||d.revision!==lastRevision||state.stage!==d.stage||questionChanged;
   sharedReady=true;initialStatusLoaded=true;sharedError="";
   liveTeams=d.teams||[];participantCount=d.participantCount||0;registeredTeams=d.registeredTeams||0;const prevActive=activeCount;activeCount=d.activeCount;activeTeams=d.activeTeams;quizControl=d.quizControl||null;if(Array.isArray(d.questions)&&d.questions.length)questions.splice(0,questions.length,...d.questions);lastRevision=d.revision;
@@ -87,6 +107,7 @@ async function loadShared(){
    save();
    const active=document.activeElement;
    if(!active||!["INPUT","SELECT","TEXTAREA"].includes(active.tagName)||questionChanged){pendingRender=false;render()}
+   if(stageChanged&&["idol","showcase"].includes(d.stage)){idolDirty=false;loadTeamIdol(true)}
    else pendingRender=true;
   }
  }catch(err){
@@ -139,7 +160,25 @@ function play(){if(!initialStatusLoaded)return '<div class="card"><h2>🎤 행�
  out+=q.choices.map((c,k)=>'<button class="option '+(selection===k?"selected":"")+'" onclick="selection='+k+';render()" '+(!canAnswer?"disabled":"")+'>'+(k+1)+'. '+esc(c)+'</button>').join("");
  if(canAnswer)out+='<button id="quizSubmit" class="primary" onclick="submitQuiz()" '+(selection===null||quizSubmitting?"disabled":"")+'>정답 제출</button>';
  return out+'</div>';
-}if(state.stage==="teamwork")return h+'<div class="card"><small>MISSION 02 · TEAMWORK</small><h2>우리 팀의 2027 키워드!</h2><p>팀원들과 상의한 다음 한 단어를 선택해 주세요.</p><div class="actions">'+["성장","소통","혁신","행복"].map(t=>'<button data-word="'+t+'">'+t+'</button>').join("")+'</div><p class="muted">선택한 키워드: '+esc(state.teamwork||"없음")+'</p></div>';if(state.stage==="idol"){let i=state.idol;return h+'<div class="card"><small>MISSION 03 · AI IDOL STUDIO</small><h2>우리 팀 아이돌 데뷔 준비</h2><form id="idol"><label>기획사명</label><input name="agency" value="'+esc(i.agency)+'" required><label>아이돌 그룹명</label><input name="group" value="'+esc(i.group)+'" required><label>그룹 유형</label><select name="type">'+["혼성그룹","걸그룹","보이그룹"].map(v=>'<option '+(v===i.type?"selected":"")+'>'+v+'</option>').join("")+'</select><label>멤버 수</label><select name="members">'+["3","4","5","6"].map(v=>'<option '+(v===i.members?"selected":"")+'>'+v+'</option>').join("")+'</select><label>아이돌 콘셉트</label><select name="concept">'+["미래형 사이버","청량","레트로","카리스마","몽환","오피스 코미디"].map(v=>'<option '+(v===i.concept?"selected":"")+'>'+v+'</option>').join("")+'</select><label>키워드 3개</label><input name="keywords" value="'+esc(i.keywords)+'"><label>데뷔곡명</label><input name="song" value="'+esc(i.song)+'"><label>슬로건</label><input name="slogan" value="'+esc(i.slogan)+'"><button class="primary">데뷔 포스터 시안 만들기</button><button type="button" id="generateText">✨ AI 아이돌 기획 생성</button></form></div>'+(state.submitted?'<div class="card">'+poster()+'<p class="muted">현재 포스터는 그래픽 시안으로, 실제 AI 이미지는 추후 API를 연결합니다.</p></div>':"")}if(state.stage==="showcase")return h+'<div class="card"><h2>🎤 DEBUT SHOWCASE</h2>'+(state.submitted?poster():"아직 제작한 포스터가 없습니다.")+'</div>';if(state.stage==="vote")return h+'<div class="card"><h2>💗 국민 프로듀서 투표</h2>'+(state.voted?'<p class="notice">투표가 완료되었습니다!</p>':teams.filter(t=>t!==state.team).map(t=>'<button class="option" data-vote="'+t+'">'+t+'에 투표하기</button>').join(""))+'</div>';return h+'<div class="card"><h2>🏆 최종 데뷔 순위</h2>'+scores()+'</div>'}
+}if(state.stage==="teamwork")return h+'<div class="card"><small>MISSION 02 · TEAMWORK</small><h2>우리 팀의 2027 키워드!</h2><p>팀원들과 상의한 다음 한 단어를 선택해 주세요.</p><div class="actions">'+["성장","소통","혁신","행복"].map(t=>'<button data-word="'+t+'">'+t+'</button>').join("")+'</div><p class="muted">선택한 키워드: '+esc(state.teamwork||"없음")+'</p></div>';if(state.stage==="idol"){
+ let i=state.idol;
+ return h+'<div class="card"><small>MISSION 03 · TEAM IDOL STUDIO</small><h2>우리 팀 아이돌 데뷔 준비</h2>'
+ +'<p class="muted">같은 팀원이 저장한 기획안을 함께 볼 수 있어. 5초마다 변경 내용을 확인해.</p>'
+ +'<p class="pill" id="idolSyncNotice">'+esc(idolDirty?"수정 중 · 저장 필요":idolNotice||"팀 기획안 준비 중")+'</p>'
+ +'<form id="idol"><label>기획사명</label><input name="agency" maxlength="60" value="'+esc(i.agency)+'" required><label>아이돌 그룹명</label><input name="group" maxlength="60" value="'+esc(i.group)+'" required>'
+ +'<label>그룹 유형</label><select name="type">'+["혼성그룹","걸그룹","보이그룹"].map(v=>'<option '+(v===i.type?"selected":"")+'>'+v+'</option>').join("")+'</select>'
+ +'<label>멤버 수</label><select name="members">'+["3","4","5","6"].map(v=>'<option '+(v===i.members?"selected":"")+'>'+v+'</option>').join("")+'</select>'
+ +'<label>아이돌 콘셉트</label><select name="concept">'+["미래형 사이버","청량","레트로","카리스마","몽환","오피스 코미디"].map(v=>'<option '+(v===i.concept?"selected":"")+'>'+v+'</option>').join("")+'</select>'
+ +'<label>키워드 3개</label><input name="keywords" maxlength="200" value="'+esc(i.keywords)+'">'
+ +'<label>데뷔곡명</label><input name="song" maxlength="100" value="'+esc(i.song)+'">'
+ +'<label>슬로건</label><input name="slogan" maxlength="200" value="'+esc(i.slogan)+'">'
+ +'<button class="primary" type="submit">💾 우리 팀 기획안 공유 저장</button>'
+ +'<button type="button" id="reloadIdol">↻ 팀원 최신 기획안 불러오기</button>'
+ +'</form></div>'
+ +(state.submitted?'<div class="card">'+poster()+'<p class="muted">현재 포스터는 텍스트 시안이야. AI 이미지 생성은 별도 개발 단계에서 연결할 예정이야.</p></div>':"");
+}
+if(state.stage==="showcase")return h+'<div class="card"><h2>🎤 DEBUT SHOWCASE</h2>'+(state.submitted?poster():"우리 팀이 저장한 아이돌 기획안을 불러오고 있어요.")+'</div>';
+if(state.stage==="vote")return h+'<div class="card"><h2>💗 국민 프로듀서 투표</h2>'+(state.voted?'<p class="notice">투표가 완료되었습니다!</p>':teams.filter(t=>t!==state.team).map(t=>'<button class="option" data-vote="'+t+'">'+t+'에 투표하기</button>').join(""))+'</div>';return h+'<div class="card"><h2>🏆 최종 데뷔 순위</h2>'+scores()+'</div>'}
 function quizRemaining(){
  if(!quizControl||quizControl.status!=="open")return 0;
  return Math.max(0,Math.ceil((Number(quizControl.closesAt)-Date.now())/1000));
@@ -285,16 +324,31 @@ if(j)j.onsubmit=async ev=>{
  state.name=name;state.team=teamName;state.answers={};save();render();heartbeat();
 };
 let id=document.getElementById("idol");
-if(id)id.onsubmit=async ev=>{
- ev.preventDefault();let f=new FormData(id);
- Object.keys(state.idol).forEach(k=>state.idol[k]=String(f.get(k)||""));
- state.submitted=true;save();render();
- if(sharedReady&&state.participantId){
+if(id){
+ id.addEventListener("input",()=>{idolDirty=true;const el=document.getElementById("idolSyncNotice");if(el)el.textContent="수정 중 · 저장 필요"});
+ id.addEventListener("change",()=>{idolDirty=true;const el=document.getElementById("idolSyncNotice");if(el)el.textContent="수정 중 · 저장 필요"});
+ id.onsubmit=async ev=>{
+  ev.preventDefault();
+  if(!state.participantId)return alert("직원 참가 후 이용해주세요.");
+  const f=new FormData(id),draft={};
+  for(const key of ["agency","group","type","members","concept","keywords","song","slogan"])draft[key]=String(f.get(key)||"");
+  const button=id.querySelector('button[type="submit"]');button.disabled=true;
   try{
-   const r=await fetch("/api/idol/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({participantId:state.participantId,idol:state.idol})});
-   if(!r.ok)alert("브라우저에는 저장됐지만 공유 서버 저장에 실패했습니다.");
-  }catch{alert("공유 저장에 실패했습니다.")}
- }
+   const r=await fetch("/api/idol/project",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({participantId:state.participantId,idol:draft,version:idolVersion})});
+   const d=await r.json();
+   if(!r.ok){
+    if(d.conflict)idolNotice="다른 팀원이 먼저 저장했습니다. 최신 내용을 불러오고 다시 작성해 주세요.";
+    throw Error(d.error||"저장 실패");
+   }
+   idolVersion=d.version;idolDirty=false;idolNotice="✅ 팀 기획안 저장 완료! 다른 팀원에게도 공유돼요.";
+   state.idol={...state.idol,...draft};state.submitted=true;save();render();
+  }catch(e){alert(e.message);button.disabled=false}
+ };
+}
+let reloadIdol=document.getElementById("reloadIdol");
+if(reloadIdol)reloadIdol.onclick=async()=>{
+ if(idolDirty&&!confirm("저장하지 않은 수정 내용이 사라져요. 최신 기획안을 불러올까요?"))return;
+ idolDirty=false;await loadTeamIdol(true);
 };
 document.querySelectorAll("[data-word]").forEach(b=>b.onclick=()=>{if(!sharedReady&&!state.teamwork)state.scores[state.team]+=10;state.teamwork=b.dataset.word;save();render()});document.querySelectorAll("[data-vote]").forEach(b=>b.onclick=()=>{if(state.voted)return;state.voted=true;let t=b.dataset.vote;state.votes[t]=(state.votes[t]||0)+1;if(!sharedReady)state.scores[t]+=5;save();render()});for(const [id,action] of [["quizSelect","select"],["quizStart","start"],["quizClose","close"],["quizReveal","reveal"],["quizNext","next"]]){let b=document.getElementById(id);if(b)b.onclick=()=>controlQuiz(action)};let qpick=document.getElementById("quizQuestion");if(qpick)qpick.onchange=()=>{const q=questions[Number(qpick.value)];const dur=document.getElementById("quizDuration");if(dur&&q&&Number.isInteger(q.durationSeconds)){dur.value=String(q.durationSeconds)}};let s=document.getElementById("stage");if(s)s.onchange=()=>moveStage(s.value);let next=document.getElementById("nextStage");if(next)next.onclick=()=>{const idx=stages.indexOf(state.stage);if(idx>=0&&idx<stages.length-1)moveStage(stages[idx+1])};let refresh=document.getElementById("refreshLive");if(refresh)refresh.onclick=loadShared;let a=document.getElementById("addScore");if(a)a.onclick=()=>{let t=document.getElementById("scoreTeam").value,d=Number(document.getElementById("delta").value);if(Number.isFinite(d)&&Math.abs(d)<=100){adjustScore(t,d)}};let reset=document.getElementById("resetServer");if(reset)reset.onclick=async()=>{
  if(!confirm("D1에 저장된 모든 테스트 참가 기록, 퀴즈 답안, 아이돌 기획, 팀 점수를 삭제하고 라운드를 입장 대기로 되돌릴까요? 되돌릴 수 없습니다."))return;
@@ -306,5 +360,5 @@ document.querySelectorAll("[data-word]").forEach(b=>b.onclick=()=>{if(!sharedRea
   state=fresh();save();lastRevision=-1;await loadShared();alert("테스트 데이터 초기화 완료. 참가자 기기에서도 재입장해 주세요.");
  }catch(e){alert(e.message)}
 };let x=document.getElementById("export");if(x)x.onclick=()=>{let u=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:"application/json"})),a=document.createElement("a");a.href=u;a.download="kpec-demo-state.json";a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}}
-render();loadShared().then(loadQuizProgress);heartbeat();
+render();loadShared().then(async()=>{await loadQuizProgress();await loadTeamIdol(true)});heartbeat();
 </script></body></html>
