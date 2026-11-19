@@ -40,8 +40,19 @@ async function sharedState(env){
   const quizScore=participantTotal?Math.round(raw*2/participantTotal*10)/10:0;
   return {...x,score:Math.round((x.score+quizScore)*10)/10,baseScore:x.score,quizScore,quizRawPoints:raw,participants:participantTotal};
  });
+ let activeCount=null,activeTeams=null;
+ try{
+  const active=await env.DB.prepare("SELECT team_id,COUNT(*) AS n FROM participants WHERE last_seen_at >= datetime('now','-90 seconds') GROUP BY team_id").all();
+  const countsByTeam=Object.fromEntries((active.results||[]).map(v=>[v.team_id,Number(v.n)||0]));
+  for(const t of teamResults)t.activeParticipants=countsByTeam[t.id]||0;
+  activeCount=Object.values(countsByTeam).reduce((a,b)=>a+b,0);
+  activeTeams=Object.values(countsByTeam).filter(v=>v>0).length;
+ }catch{
+  // Graceful fallback until the presence migration has run.
+  for(const t of teamResults)t.activeParticipants=null;
+ }
  const registeredTeams=teamResults.filter(t=>t.participants>0).length;
- return {stage:state?.stage||"lobby",revision:state?.revision||0,teams:teamResults,participantCount:teamResults.reduce((n,t)=>n+t.participants,0),registeredTeams,updated_at:state?.updated_at||null};
+ return {stage:state?.stage||"lobby",revision:state?.revision||0,teams:teamResults,participantCount:teamResults.reduce((n,t)=>n+t.participants,0),registeredTeams,activeCount,activeTeams,updated_at:state?.updated_at||null};
 }
 function allowedOrigin(request){const origin=request.headers.get("origin");return !origin||origin===new URL(request.url).origin}
 export default {
@@ -117,6 +128,17 @@ export default {
     ]);
     return json({ok:true,...await sharedState(env)});
    }catch{return json({error:"초기화에 실패했습니다. quiz_answers 테이블이 생성됐는지 확인하세요."},503)}
+  }
+  if(url.pathname==="/api/participants/heartbeat"&&request.method==="POST"){
+   if(!env.DB)return json({error:"D1 연결 필요"},503);
+   let body;try{body=await request.json()}catch{return json({error:"Invalid JSON"},400)}
+   const id=String(body.participantId||"");
+   if(!/^[0-9a-f-]{36}$/i.test(id))return json({error:"올바르지 않은 참가자 정보"},400);
+   try{
+    const update=await env.DB.prepare("UPDATE participants SET last_seen_at=CURRENT_TIMESTAMP WHERE id=?").bind(id).run();
+    if(!update.meta?.changes)return json({error:"등록되지 않은 참가자입니다. 재입장해 주세요.",stale:true},404);
+    return json({ok:true});
+   }catch{return json({error:"활성 참가 집계를 위한 migration_003_presence.sql 적용이 필요합니다."},503)}
   }
   if(url.pathname==="/api/participants/join"&&request.method==="POST"){
    if(!env.DB)return json({error:"D1 바인딩이 없습니다."},503);
