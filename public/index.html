@@ -31,7 +31,7 @@ const fresh=()=>({name:"",team:teams[0],stage:"lobby",answers:{},teamwork:"",ido
 const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])),save=()=>localStorage.setItem(KEY,JSON.stringify(state)),stageLabel=()=>labels[stages.indexOf(state.stage)]||state.stage,view=()=>document.getElementById("view");
 function scores(){return Object.entries(state.scores).sort((a,b)=>b[1]-a[1]).map(([t,n],i)=>'<div class="score"><span>'+(i+1)+'위 · '+esc(t)+'</span><b>'+n+'점</b></div>').join("")}
 function poster(){const i=state.idol;return '<div class="poster"><small>✦ 2027 KPEC DEBUT PROJECT ✦</small><h2>'+esc(i.group||"YOUR IDOL")+'</h2><span>'+esc(i.concept)+' · '+esc(i.members)+'인조 '+esc(i.type)+'</span><p>'+esc(i.slogan||"우리의 무대가 시작된다")+'</p><span class="chip">DEBUT · '+esc(i.song||"NEW BEGINNING")+'</span></div>'}
-let sharedReady=false, lastRevision=-1, liveTeams=[],initialStatusLoaded=false,sharedError="",currentRole=null,participantCount=0,registeredTeams=0,activeCount=null,activeTeams=null,quizSubmitting=false,quizControl=null;
+let sharedReady=false, lastRevision=-1, liveTeams=[],initialStatusLoaded=false,sharedError="",currentRole=null,participantCount=0,registeredTeams=0,activeCount=null,activeTeams=null,quizSubmitting=false,quizControl=null,adminQuestions=null,adminQuestionIndex=0,adminQuestionBusy=false;
 async function setTab(t){
  if(t!=="play"){
   try {
@@ -45,7 +45,7 @@ async function setTab(t){
    }else currentRole=session.role;
   }catch(err){alert("인증 연결 실패: "+err.message);return}
  }
- tab=t;render();
+ tab=t;if(tab==="admin")await loadAdminQuestions();render();
 }
 async function heartbeat(){
  if(!state.participantId||document.visibilityState==="hidden")return;
@@ -76,7 +76,7 @@ async function loadShared(){
   if(!d.ready)throw Error(d.error||"D1 준비 전");
   const changed=!sharedReady||d.revision!==lastRevision||state.stage!==d.stage;
   sharedReady=true;initialStatusLoaded=true;sharedError="";
-  liveTeams=d.teams||[];participantCount=d.participantCount||0;registeredTeams=d.registeredTeams||0;const prevActive=activeCount;activeCount=d.activeCount;activeTeams=d.activeTeams;quizControl=d.quizControl||null;lastRevision=d.revision;
+  liveTeams=d.teams||[];participantCount=d.participantCount||0;registeredTeams=d.registeredTeams||0;const prevActive=activeCount;activeCount=d.activeCount;activeTeams=d.activeTeams;quizControl=d.quizControl||null;if(Array.isArray(d.questions)&&d.questions.length===3)questions.splice(0,questions.length,...d.questions);lastRevision=d.revision;
   if(changed||prevActive!==activeCount){
    state.stage=d.stage;
    state.scores=Object.fromEntries(liveTeams.map(t=>[t.name,t.score]));
@@ -157,6 +157,41 @@ function updateQuizClock(){
  if(lock&&quizControl?.status==="open"&&remain<=0){lock.disabled=true;lock.textContent="제출 시간 종료"}
 }
 setInterval(updateQuizClock,500);
+async function loadAdminQuestions(){
+ try{
+  const r=await fetch("/api/admin/questions",{cache:"no-store"});
+  const d=await r.json();if(!r.ok)throw Error(d.error||"문제를 가져오지 못했습니다.");
+  adminQuestions=d.questions||[];
+ }catch(e){adminQuestions=null;alert(e.message)}
+}
+function questionEditor(){
+ if(!Array.isArray(adminQuestions)||adminQuestions.length!==3)
+  return '<div class="card"><h2>📝 퀴즈 문제 관리</h2><p class="muted">문제 편집 테이블이 준비되지 않았습니다.</p><button id="reloadQuestions">다시 불러오기</button></div>';
+ const q=adminQuestions[adminQuestionIndex];
+ return '<div class="card"><div class="eyebrow">QUIZ QUESTION MANAGER</div><h2>📝 퀴즈 문제 편집</h2>'
+ +'<p class="muted">관리자 전용 · 문항별 질문, 4개 보기, 정답, 제한시간을 저장할 수 있습니다.</p>'
+ +'<div class="actions">'+adminQuestions.map((item,i)=>'<button data-edit-question="'+i+'" '+(i===adminQuestionIndex?'class="primary"':'')+'>'+(i+1)+'번 문제</button>').join("")+'</div>'
+ +'<form id="questionEdit"><label>질문</label><textarea name="q" rows="3" maxlength="180" required>'+esc(q.q)+'</textarea>'
+ +q.choices.map((choice,i)=>'<label>'+(i+1)+'번 보기</label><input name="choice'+i+'" maxlength="100" required value="'+esc(choice)+'">').join("")
+ +'<label>정답 보기</label><select name="correctIndex">'+q.choices.map((_,i)=>'<option value="'+i+'" '+(q.correctIndex===i?'selected':'')+'>'+(i+1)+'번 보기</option>').join("")+'</select>'
+ +'<label>기본 제한시간 (초)</label><input name="durationSeconds" type="number" min="10" max="180" step="1" required value="'+q.durationSeconds+'">'
+ +'<button class="primary" type="submit" '+(adminQuestionBusy?'disabled':'')+'>💾 문제 저장</button></form>'
+ +'<p class="muted">현재 진행 중이거나 이미 답안이 제출된 문제는 변경할 수 없습니다. 문제 내용은 저장 후 직원·사회자 화면에 자동 반영됩니다.</p></div>';
+}
+async function saveQuestion(e){
+ e.preventDefault();if(adminQuestionBusy)return;
+ const f=new FormData(e.currentTarget),body={
+  id:adminQuestionIndex,q:String(f.get("q")||""),
+  choices:[0,1,2,3].map(i=>String(f.get("choice"+i)||"")),
+  correctIndex:Number(f.get("correctIndex")),durationSeconds:Number(f.get("durationSeconds"))
+ };
+ adminQuestionBusy=true;
+ try{
+  const r=await fetch("/api/admin/questions",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
+  const d=await r.json();if(!r.ok)throw Error(d.error||"저장하지 못했습니다.");
+  adminQuestions=d.questions;lastRevision=-1;await loadShared();alert((adminQuestionIndex+1)+"번 문제가 저장되었습니다.");render();
+ }catch(e){alert(e.message)}finally{adminQuestionBusy=false}
+}
 function host(){
  return '<div class="grid"><div class="card"><div class="eyebrow">LIVE MC CONTROL</div><h2>🎤 사회자 진행 콘솔</h2>'
  +'<div class="metrics"><div class="metric"><b>'+(activeCount===null?"—":activeCount)+'</b><small>최근 90초 접속 기기</small></div><div class="metric"><b>'+participantCount+'</b><small>누적 참가 등록</small></div><div class="metric"><b>'+registeredTeams+' / '+liveTeams.length+'</b><small>등록 팀 / 개설 팀</small></div></div>'
@@ -176,7 +211,7 @@ function host(){
 }
 function admin(){
  return '<div class="grid"><div class="card"><h2>⚙️ 관리자 콘솔</h2><label>점수 조정 팀</label><select id="scoreTeam">'+teams.map(t=>'<option>'+t+'</option>').join("")+'</select><label>가감 점수</label><input id="delta" type="number" value="5" min="-100" max="100"><div class="actions"><button id="addScore" class="primary">점수 반영</button></div></div>'
- +'<div class="card"><h2>📊 데이터 관리</h2><div class="score"><span>누적 참가 등록</span><b>'+participantCount+'건</b></div><div class="score"><span>등록된 팀</span><b>'+registeredTeams+'개</b></div><div class="score"><span>현재 라운드</span><b>'+stageLabel()+'</b></div><p class="muted">테스트 중 중복 참가 기록이 쌓일 수 있어. 아래 초기화는 실제 D1 데이터를 삭제해.</p><button id="resetServer">⚠️ 테스트 참가 기록·점수 전체 초기화</button><button id="export">이 브라우저 데모 JSON 다운로드</button></div></div>';
+ +questionEditor()+'<div class="card"><h2>📊 데이터 관리</h2><div class="score"><span>누적 참가 등록</span><b>'+participantCount+'건</b></div><div class="score"><span>등록된 팀</span><b>'+registeredTeams+'개</b></div><div class="score"><span>현재 라운드</span><b>'+stageLabel()+'</b></div><p class="muted">테스트 중 중복 참가 기록이 쌓일 수 있어. 아래 초기화는 실제 D1 데이터를 삭제해.</p><button id="resetServer">⚠️ 테스트 참가 기록·점수 전체 초기화</button><button id="export">이 브라우저 데모 JSON 다운로드</button></div></div>';
 }
 async function loadQuizProgress(){
  if(!state.participantId||!sharedReady)return;
@@ -203,7 +238,9 @@ async function submitQuiz(){
  }catch(err){alert(err.message);await loadQuizProgress()}
  finally{quizSubmitting=false}
 }
-function render(){if(employeeOnly)tab="play";document.querySelectorAll("[data-tab]").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));view().innerHTML=(tab==="play"?play():tab==="host"?host():admin())+(tab!=="play"?'<div class="actions" style="margin:12px 0"><span class="pill">접속 권한: '+esc(currentRole==="admin"?"관리자":currentRole==="mc"?"사회자":"확인 중")+'</span><button id="roleLogout">🔒 로그아웃 / 역할 전환</button><span class="pill">'+(sharedReady?"🟢 D1 연결":"🔴 D1 확인 필요")+'</span></div>':"");let logout=document.getElementById("roleLogout");if(logout)logout.onclick=logoutRole;let ai=document.getElementById("generateText");if(ai)ai.onclick=generateIdolText;let j=document.getElementById("join");
+function render(){if(employeeOnly)tab="play";document.querySelectorAll("[data-tab]").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));view().innerHTML=(tab==="play"?play():tab==="host"?host():admin())+(tab!=="play"?'<div class="actions" style="margin:12px 0"><span class="pill">접속 권한: '+esc(currentRole==="admin"?"관리자":currentRole==="mc"?"사회자":"확인 중")+'</span><button id="roleLogout">🔒 로그아웃 / 역할 전환</button><span class="pill">'+(sharedReady?"🟢 D1 연결":"🔴 D1 확인 필요")+'</span></div>':"");let logout=document.getElementById("roleLogout");if(logout)logout.onclick=logoutRole;let qe=document.getElementById("questionEdit");if(qe)qe.onsubmit=saveQuestion;
+document.querySelectorAll("[data-edit-question]").forEach(b=>b.onclick=()=>{if(document.getElementById("questionEdit")&&!confirm("저장하지 않은 입력 내용은 사라집니다. 다른 문제로 이동할까요?"))return;adminQuestionIndex=Number(b.dataset.editQuestion);render()});
+let rq=document.getElementById("reloadQuestions");if(rq)rq.onclick=async()=>{await loadAdminQuestions();render()};let ai=document.getElementById("generateText");if(ai)ai.onclick=generateIdolText;let j=document.getElementById("join");
 if(j)j.onsubmit=async ev=>{
  ev.preventDefault();
  const f=new FormData(j),name=String(f.get("name")||"").trim(),teamName=String(f.get("team")||"");
