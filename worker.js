@@ -103,6 +103,7 @@ export default {
     if(!team)return json({error:"팀을 선택해 주세요."},400);
     const id=crypto.randomUUID();
     await env.DB.prepare("INSERT INTO participants(id,team_id,display_name) VALUES (?,?,?)").bind(id,teamId,displayName).run();
+    await env.DB.prepare("UPDATE event_state SET revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1").run();
     return json({ok:true,participantId:id,teamName:team.name});
    }catch{return json({error:"참가자 저장 실패"},503)}
   }
