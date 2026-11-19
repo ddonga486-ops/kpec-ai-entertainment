@@ -338,20 +338,51 @@ export default {
     return json({ok:true,points,nextQuestion:q+1});
    }catch{return json({error:"퀴즈 저장 실패. migration_006_dynamic_quiz.sql 적용 상태를 확인하세요."},503)}
   }
-  if(url.pathname==="/api/idol/project"&&request.method==="POST"){
-   if(!env.DB)return json({error:"D1 바인딩이 없습니다."},503);
-   let body;try{body=await request.json()}catch{return json({error:"Invalid JSON"},400)}
-   const participantId=String(body.participantId||""),data=body.idol;
-   if(!data||typeof data!=="object"||JSON.stringify(data).length>7000)return json({error:"잘못된 아이돌 프로젝트 데이터입니다."},400);
+  if(url.pathname==="/api/idol/team"&&request.method==="GET"){
+   if(!env.DB)return json({error:"D1 연결 필요"},503);
+   const pid=String(url.searchParams.get("participantId")||"");
+   if(!/^[0-9a-f-]{36}$/i.test(pid))return json({error:"참가 정보를 확인해주세요."},400);
    try{
-    const p=await env.DB.prepare("SELECT team_id FROM participants WHERE id=?").bind(participantId).first();
-    if(!p)return json({error:"참가자 등록 정보가 없습니다."},403);
-    await env.DB.prepare("INSERT INTO idol_projects(team_id,data_json) VALUES (?,?) ON CONFLICT(team_id) DO UPDATE SET data_json=excluded.data_json,updated_at=CURRENT_TIMESTAMP").bind(p.team_id,JSON.stringify(data)).run();
-    return json({ok:true});
-   }catch{return json({error:"프로젝트 저장 실패"},503)}
+    const p=await env.DB.prepare("SELECT team_id FROM participants WHERE id=?").bind(pid).first();
+    if(!p)return json({error:"등록되지 않은 참가자입니다. 다시 입장해주세요.",stale:true},404);
+    const project=await env.DB.prepare("SELECT data_json,version,updated_at FROM idol_projects WHERE team_id=?").bind(p.team_id).first();
+    return json({teamId:p.team_id,project:project?JSON.parse(project.data_json):null,version:project?.version||0,updatedAt:project?.updated_at||null});
+   }catch{return json({error:"팀 공동 편집 테이블 설정이 필요합니다. migration_007_idol_collaboration.sql 적용 여부를 확인해주세요."},503)}
+  }
+  if(url.pathname==="/api/idol/project"&&request.method==="POST"){
+   if(!env.DB)return json({error:"D1 연결 필요"},503);
+   let body;try{body=await request.json()}catch{return json({error:"Invalid JSON"},400)}
+   const pid=String(body.participantId||""),data=body.idol,version=body.version;
+   if(!/^[0-9a-f-]{36}$/i.test(pid)||!Number.isInteger(version)||version<0||version>100000||
+      !data||typeof data!=="object"||Array.isArray(data))return json({error:"입력한 프로젝트 정보가 올바르지 않습니다."},400);
+   const schema={agency:60,group:60,type:30,members:5,concept:80,keywords:200,song:100,slogan:200};
+   const safe={};
+   for(const [key,max] of Object.entries(schema)){
+    const v=String(data[key]??"").trim();
+    if(v.length>max)return json({error:key+" 항목이 너무 깁니다."},400);
+    safe[key]=v;
+   }
+   if(!safe.group||!safe.agency)return json({error:"기획사와 그룹명을 입력해 주세요."},400);
+   if(!["3","4","5","6"].includes(safe.members))return json({error:"멤버 수를 확인해 주세요."},400);
+   try{
+    const p=await env.DB.prepare("SELECT team_id FROM participants WHERE id=?").bind(pid).first();
+    if(!p)return json({error:"참가자 등록 정보가 없습니다. 다시 입장해 주세요.",stale:true},403);
+    const stage=await env.DB.prepare("SELECT stage FROM event_state WHERE id=1").first();
+    if(stage?.stage!=="idol")return json({error:"현재는 아이돌 제작 라운드가 아닙니다."},409);
+    let result;
+    if(version===0)result=await env.DB.prepare("INSERT OR IGNORE INTO idol_projects(team_id,data_json,version) VALUES(?,?,1)").bind(p.team_id,JSON.stringify(safe)).run();
+    else result=await env.DB.prepare("UPDATE idol_projects SET data_json=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE team_id=? AND version=?").bind(JSON.stringify(safe),p.team_id,version).run();
+    if(!result.meta?.changes){
+     const current=await env.DB.prepare("SELECT data_json,version,updated_at FROM idol_projects WHERE team_id=?").bind(p.team_id).first();
+     return json({error:"다른 팀원이 먼저 저장했어요. 최신 기획안을 불러온 뒤 다시 편집해 주세요.",conflict:true,project:current?JSON.parse(current.data_json):null,version:current?.version||0},409);
+    }
+    await env.DB.prepare("UPDATE event_state SET revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=1").run();
+    return json({ok:true,version:version+1,project:safe});
+   }catch(e){return json({error:"공동 저장 오류: "+String(e.message||"D1 오류").slice(0,130)},503)}
   }
   if(url.pathname==="/api/idol/projects"&&request.method==="GET"){
-   if(!env.DB)return json({error:"D1 바인딩이 없습니다."},503);
+   if(role!=="admin"&&role!=="mc")return json({error:"사회자 또는 관리자 인증이 필요합니다."},403);
+   if(!env.DB)return json({error:"D1 연결 필요"},503);
    try{const rows=await env.DB.prepare("SELECT team_id,data_json,updated_at FROM idol_projects").all();return json({projects:(rows.results||[]).map(x=>({teamId:x.team_id,project:JSON.parse(x.data_json),updatedAt:x.updated_at}))})}catch{return json({error:"D1 조회 실패"},503)}
   }
   if(!role)return json({error:"관리자 또는 사회자 인증이 필요합니다."},401);
