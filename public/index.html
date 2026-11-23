@@ -45,7 +45,7 @@ async function setTab(t){
    }else currentRole=session.role;
   }catch(err){alert("인증 연결 실패: "+err.message);return}
  }
- tab=t;if(tab==="admin"){await loadAdminQuestions();await loadAdminImages().catch(()=>{})}render();
+ tab=t;if(tab==="admin"){await loadAdminQuestions();await loadAdminImages().catch(()=>{})}if(tab==="host")await loadAdminImages().catch(()=>{});render();
 }
 async function heartbeat(){
  if(!state.participantId||document.visibilityState==="hidden")return;
@@ -147,6 +147,7 @@ async function loadShared(){
    const active=document.activeElement;
    if(!active||!["INPUT","SELECT","TEXTAREA"].includes(active.tagName)||questionChanged){pendingRender=false;render()}
    if(stageChanged&&["idol","showcase"].includes(d.stage)){idolDirty=false;loadTeamIdol(true);loadIdolImageStatus()}
+   if(stageChanged&&d.stage==="showcase"&&tab==="host")loadAdminImages().then(()=>render()).catch(()=>{});
    else pendingRender=true;
   }
  }catch(err){
@@ -312,6 +313,7 @@ function host(){
  +'<p class="muted">관리자가 수정한 문제는 D1에서 불러옵니다. 문항 변경 시 문제 선택 적용을 눌러 주세요.</p><p class="muted">문제 공개 전에는 직원이 답을 제출할 수 없어. 제한시간이 지나면 서버에서도 제출을 거절해.</p></div>'
 
  +'<p class="muted">직원 화면은 약 3초마다 동기화돼. 최근 90초간 접속 확인한 참가 기기를 활성으로 표시해. 누적 등록과 실제 인원은 다를 수 있어.</p></div>'
+ +(state.stage==="showcase"?'<div class="card"><div class="eyebrow">DEBUT SHOWCASE</div><h2>🎤 팀별 아이돌 무대</h2>'+adminImageTeams.map(t=>'<div class="card" style="margin:12px 0"><h3>'+esc(t.name)+' · '+esc(t.project?.group||"준비 중")+'</h3>'+(t.status==="ready"?'<img alt="'+esc(t.name)+' 아이돌 이미지" style="width:100%;border-radius:16px;max-height:420px;object-fit:contain" src="/api/idol/image?teamId='+encodeURIComponent(t.id)+'" />':'<p class="muted">아직 생성된 이미지가 없습니다.</p>')+'<p>'+esc(t.project?.slogan||"")+'</p></div>').join("")+'</div>':"")
  +'<div class="card"><h2>🏆 팀별 현황</h2><p class="muted">총 '+questions.length+'문제 · 팀원별 정답률에 따라 점수를 반영해.</p>'
  +liveTeams.map(t=>'<div class="score"><span><b>'+esc(t.name)+'</b><div class="muted">등록 기록 '+t.participants+'건 · 퀴즈 '+t.quizScore+'점</div></span><b>'+t.score+'점</b></div>').join("")
  +'</div></div>';
