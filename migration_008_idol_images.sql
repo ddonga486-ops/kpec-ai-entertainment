@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS idol_images (
+ team_id TEXT PRIMARY KEY REFERENCES teams(id),
+ status TEXT NOT NULL DEFAULT 'generating',
+ r2_key TEXT,
+ model TEXT,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
