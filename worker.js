@@ -338,6 +338,71 @@ export default {
     return json({ok:true,points,nextQuestion:q+1});
    }catch{return json({error:"퀴즈 저장 실패. migration_006_dynamic_quiz.sql 적용 상태를 확인하세요."},503)}
   }
+  if(url.pathname==="/api/idol/images"&&request.method==="GET"){
+   if(role!=="admin"&&role!=="mc")return json({error:"관리자 또는 사회자 권한이 필요합니다."},403);
+   if(!env.DB)return json({error:"D1이 연결되지 않았습니다."},503);
+   try{
+    const entries=await env.DB.prepare("SELECT t.id,t.name,p.data_json,i.status,i.updated_at FROM teams t LEFT JOIN idol_projects p ON p.team_id=t.id LEFT JOIN idol_images i ON i.team_id=t.id ORDER BY t.rowid").all();
+    return json({teams:(entries.results||[]).map(x=>({id:x.id,name:x.name,project:x.data_json?JSON.parse(x.data_json):null,status:x.status||"not_generated",updatedAt:x.updated_at||null})),configured:!!(env.IDOL_IMAGES&&env.OPENAI_API_KEY)});
+   }catch{return json({error:"migration_008_idol_images.sql을 먼저 실행해주세요."},503)}
+  }
+  if(url.pathname==="/api/idol/image"&&request.method==="GET"){
+   if(!env.IDOL_IMAGES||!env.DB)return json({error:"이미지 저장소가 연결되지 않았습니다."},503);
+   const teamId=String(url.searchParams.get("teamId")||"");
+   const pid=String(url.searchParams.get("participantId")||"");
+   if(role!=="admin"&&role!=="mc"){
+    if(!/^[0-9a-f-]{36}$/i.test(pid))return json({error:"참가자 인증이 필요합니다."},403);
+    const p=await env.DB.prepare("SELECT team_id FROM participants WHERE id=?").bind(pid).first();
+    if(!p||p.team_id!==teamId)return json({error:"본인 팀 이미지에만 접근할 수 있습니다."},403);
+   }
+   const rec=await env.DB.prepare("SELECT status,r2_key FROM idol_images WHERE team_id=?").bind(teamId).first();
+   if(!rec||rec.status!=="ready"||!rec.r2_key)return json({error:"완성된 이미지가 아직 없습니다."},404);
+   const file=await env.IDOL_IMAGES.get(rec.r2_key);
+   if(!file)return json({error:"이미지 파일을 찾지 못했습니다."},404);
+   return new Response(file.body,{headers:{"content-type":"image/png","cache-control":"private, max-age=60","x-content-type-options":"nosniff"}});
+  }
+  if(url.pathname==="/api/idol/image-status"&&request.method==="GET"){
+   if(!env.DB)return json({error:"D1이 연결되지 않았습니다."},503);
+   const pid=String(url.searchParams.get("participantId")||"");
+   if(!/^[0-9a-f-]{36}$/i.test(pid))return json({error:"참가 정보를 확인해 주세요."},400);
+   const p=await env.DB.prepare("SELECT team_id FROM participants WHERE id=?").bind(pid).first();
+   if(!p)return json({error:"참가자가 존재하지 않습니다."},403);
+   try{
+    const rec=await env.DB.prepare("SELECT status,updated_at FROM idol_images WHERE team_id=?").bind(p.team_id).first();
+    return json({status:rec?.status||"not_generated",updatedAt:rec?.updated_at||null});
+   }catch{return json({error:"이미지 기록용 SQL을 실행해주세요."},503)}
+  }
+  if(url.pathname==="/api/admin/idol/generate"&&request.method==="POST"){
+   if(role!=="admin")return json({error:"이미지 생성은 관리자만 할 수 있습니다."},403);
+   if(!env.DB||!env.IDOL_IMAGES||!env.OPENAI_API_KEY)return json({error:"D1, IDOL_IMAGES R2 바인딩, OPENAI_API_KEY Secret 설정이 모두 필요합니다."},503);
+   let body;try{body=await request.json()}catch{return json({error:"잘못된 요청입니다."},400)}
+   const teamId=String(body.teamId||"");
+   if(!/^[a-z0-9-]{2,60}$/.test(teamId))return json({error:"팀 정보가 올바르지 않습니다."},400);
+   try{
+    const project=await env.DB.prepare("SELECT data_json FROM idol_projects WHERE team_id=?").bind(teamId).first();
+    if(!project)return json({error:"이 팀의 기획안이 아직 저장되지 않았습니다."},409);
+    // Unique team id is a concurrency-safe reservation. One generation per team.
+    const reserve=await env.DB.prepare("INSERT OR IGNORE INTO idol_images(team_id,status) VALUES(?,'generating')").bind(teamId).run();
+    if(!reserve.meta?.changes)return json({error:"이미 생성했거나 생성 중인 팀입니다. 중복 생성은 차단됩니다."},409);
+    const item=JSON.parse(project.data_json),members=Math.min(6,Math.max(3,Number(item.members)||5));
+    const prompt="Create a polished photorealistic debut promotional group portrait of exactly "+members+" entirely fictional adult K-pop idol members. Original faces, no resemblance to real celebrities or existing groups. Their group concept is "+String(item.concept||"futuristic").slice(0,80)+". Group type: "+String(item.type||"mixed").slice(0,30)+". Keywords: "+String(item.keywords||"teamwork").slice(0,150)+". High-end fashion editorial, coordinated but distinct stage styling, expressive faces, dramatic neon magenta and electric blue stage lighting. Portrait vertical composition 2:3, full group visible, elegant clean background. Do NOT include any text, letters, logos or watermarks. Safe for corporate family-friendly annual kickoff event.";
+    const resp=await fetch("https://api.openai.com/v1/images/generations",{method:"POST",headers:{"Authorization":"Bearer "+env.OPENAI_API_KEY,"Content-Type":"application/json"},body:JSON.stringify({model:"gpt-image-2",prompt,size:"1024x1536",quality:"medium",output_format:"png",n:1})});
+    const out=await resp.json();
+    if(!resp.ok||!out.data?.[0]?.b64_json)throw Error(out.error?.message||"이미지 API 호출 실패");
+    const encoded=out.data[0].b64_json;
+    // Decode in chunks to avoid repeated large temporary arrays.
+    const binary=atob(encoded),bytes=new Uint8Array(binary.length);
+    for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+    const key="teams/"+teamId+"/debut-"+crypto.randomUUID()+".png";
+    await env.IDOL_IMAGES.put(key,bytes,{httpMetadata:{contentType:"image/png"}});
+    await env.DB.prepare("UPDATE idol_images SET status='ready',r2_key=?,model=?,updated_at=CURRENT_TIMESTAMP WHERE team_id=?").bind(key,"gpt-image-2",teamId).run();
+    return json({ok:true,teamId,status:"ready"});
+   }catch(e){
+    // Allow retry only when generation/storage fails; existing completed entries remain protected.
+    await env.DB.prepare("DELETE FROM idol_images WHERE team_id=? AND status='generating'").bind(teamId).run().catch(()=>{});
+    return json({error:"이미지 생성 실패: "+String(e.message||"API 또는 저장소 오류").slice(0,180)},502);
+   }
+  }
   if(url.pathname==="/api/idol/team"&&request.method==="GET"){
    if(!env.DB)return json({error:"D1 연결 필요"},503);
    const pid=String(url.searchParams.get("participantId")||"");
