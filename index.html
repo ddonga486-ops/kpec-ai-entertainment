@@ -30,8 +30,8 @@ const KEY="kpec-idol-prototype-v1",teams=["STAR LAB","DREAM MAKERS","NEON WAVE",
 const fresh=()=>({name:"",team:teams[0],stage:"lobby",answers:{},teamwork:"",idol:{agency:"",group:"",type:"혼성그룹",members:"5",concept:"미래형 사이버",keywords:"도전, 협력, 미래",song:"",slogan:""},submitted:false,voted:false,votes:{},scores:Object.fromEntries(teams.map(t=>[t,0]))});let state;try{state={...fresh(),...JSON.parse(localStorage.getItem(KEY)||"{}")}}catch{state=fresh()}let tab="play",selection=null,employeeOnly=new URLSearchParams(location.search).get("employee")==="1";
 const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])),save=()=>localStorage.setItem(KEY,JSON.stringify(state)),stageLabel=()=>labels[stages.indexOf(state.stage)]||state.stage,view=()=>document.getElementById("view");
 function scores(){return Object.entries(state.scores).sort((a,b)=>b[1]-a[1]).map(([t,n],i)=>'<div class="score"><span>'+(i+1)+'위 · '+esc(t)+'</span><b>'+n+'점</b></div>').join("")}
-function poster(){const i=state.idol;return '<div class="poster"><small>✦ 2027 KPEC DEBUT PROJECT ✦</small><h2>'+esc(i.group||"YOUR IDOL")+'</h2><span>'+esc(i.concept)+' · '+esc(i.members)+'인조 '+esc(i.type)+'</span><p>'+esc(i.slogan||"우리의 무대가 시작된다")+'</p><span class="chip">DEBUT · '+esc(i.song||"NEW BEGINNING")+'</span></div>'}
-let sharedReady=false, lastRevision=-1, liveTeams=[],initialStatusLoaded=false,sharedError="",currentRole=null,participantCount=0,registeredTeams=0,activeCount=null,activeTeams=null,quizSubmitting=false,quizControl=null,adminQuestions=null,adminQuestionIndex=0,adminQuestionBusy=false,lastQuestionFingerprint="",pendingRender=false,idolVersion=0,idolDirty=false,idolSyncBusy=false,idolNotice="";
+function poster(){const i=state.idol;return '<div class="poster" style="overflow:hidden;position:relative;min-height:420px;background:linear-gradient(135deg,#191337,#37306a,#632477);display:flex;flex-direction:column;justify-content:flex-end">'+(idolImageStatus==="ready"&&state.participantId?'<img alt="우리 팀 AI 아이돌 단체 사진" src="/api/idol/image?participantId='+encodeURIComponent(state.participantId)+'&teamId='+encodeURIComponent((liveTeams.find(t=>t.name===state.team)||{}).id||"")+'&v='+encodeURIComponent(idolImageStamp)+'" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" />':"")+'<div style="position:relative;z-index:1;padding:26px;background:linear-gradient(transparent,#090b20ee);text-shadow:0 2px 12px #000"><small>✦ 2027 KPEC DEBUT PROJECT ✦</small><h2>'+esc(i.group||"YOUR IDOL")+'</h2><span>'+esc(i.concept)+' · '+esc(i.members)+'인조 '+esc(i.type)+'</span><p>'+esc(i.slogan||"우리의 무대가 시작된다")+'</p><span class="chip">DEBUT · '+esc(i.song||"NEW BEGINNING")+'</span></div></div>'}
+let sharedReady=false, lastRevision=-1, liveTeams=[],initialStatusLoaded=false,sharedError="",currentRole=null,participantCount=0,registeredTeams=0,activeCount=null,activeTeams=null,quizSubmitting=false,quizControl=null,adminQuestions=null,adminQuestionIndex=0,adminQuestionBusy=false,lastQuestionFingerprint="",pendingRender=false,idolVersion=0,idolDirty=false,idolSyncBusy=false,idolNotice="",idolImageStatus="not_generated",idolImageStamp="",adminImageTeams=[],imageGenerating=false;
 async function setTab(t){
  if(t!=="play"){
   try {
@@ -45,7 +45,7 @@ async function setTab(t){
    }else currentRole=session.role;
   }catch(err){alert("인증 연결 실패: "+err.message);return}
  }
- tab=t;if(tab==="admin")await loadAdminQuestions();render();
+ tab=t;if(tab==="admin"){await loadAdminQuestions();await loadAdminImages().catch(()=>{})}if(tab==="host")await loadAdminImages().catch(()=>{});render();
 }
 async function heartbeat(){
  if(!state.participantId||document.visibilityState==="hidden")return;
@@ -62,6 +62,45 @@ async function heartbeat(){
 }
 setInterval(heartbeat,30000);
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")heartbeat()});
+async function loadIdolImageStatus(){
+ if(!state.participantId||!sharedReady||!["idol","showcase"].includes(state.stage))return;
+ try{
+  const r=await fetch("/api/idol/image-status?participantId="+encodeURIComponent(state.participantId),{cache:"no-store"});
+  if(!r.ok)return;
+  const d=await r.json();
+  if(idolImageStatus!==d.status||idolImageStamp!==d.updatedAt){idolImageStatus=d.status;idolImageStamp=d.updatedAt||"";if(!idolDirty)render()}
+ }catch{}
+}
+async function loadAdminImages(){
+ try{
+  const r=await fetch("/api/idol/images",{cache:"no-store"}),d=await r.json();
+  if(!r.ok)throw Error(d.error||"팀 이미지 목록을 불러오지 못했습니다.");
+  adminImageTeams=d.teams||[];
+  return d.configured;
+ }catch(e){adminImageTeams=[];throw e}
+}
+async function generateTeamImage(teamId){
+ if(imageGenerating)return;
+ const team=adminImageTeams.find(x=>x.id===teamId);
+ if(!team?.project)return alert("먼저 해당 팀 아이돌 기획안을 저장해 주세요.");
+ if(!confirm(team.name+" 팀의 AI 이미지를 1회 생성할까요? OpenAI API 사용료가 발생합니다. 생성 후 다시 만들기는 제한됩니다."))return;
+ imageGenerating=true;render();
+ try{
+  const r=await fetch("/api/admin/idol/generate",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({teamId})});
+  const d=await r.json();
+  if(!r.ok)throw Error(d.error||"이미지 생성에 실패했습니다.");
+  await loadAdminImages();alert(team.name+" 아이돌 이미지가 생성되어 저장됐습니다.");
+ }catch(e){alert(e.message)}
+ finally{imageGenerating=false;render()}
+}
+function idolImageManager(){
+ return '<div class="card"><div class="eyebrow">AI IMAGE DIRECTOR</div><h2>🎨 팀별 AI 아이돌 이미지 생성</h2>'
+ +'<p class="muted">관리자만 실행할 수 있어. 팀별 1회 생성에 실제 API 비용이 발생하며, 이미지가 비공개 R2에 저장돼.</p>'
+ +'<button id="refreshImageTeams">↻ 기획안·이미지 상태 불러오기</button>'
+ +(adminImageTeams.length?adminImageTeams.map(t=>'<div class="score"><span><b>'+esc(t.name)+'</b><div class="muted">'+(t.project?esc(t.project.group||"그룹명 미정"):"저장된 기획안 없음")+' · '+(t.status==="ready"?"이미지 완성":t.status==="generating"?"생성 중":"미생성")+'</div></span><button style="width:auto" data-image-team="'+esc(t.id)+'" '+(!t.project||t.status!=="not_generated"||imageGenerating?'disabled':'')+'>✨ 이미지 생성</button></div>').join(""):'<p class="notice">팀 목록을 불러오려면 위 버튼을 눌러줘.</p>')
+ +'<p class="muted">처음 사용하기 전 R2 바인딩과 OpenAI API Secret, 이미지 테이블이 필요해. 자동 재생성은 지원하지 않아.</p></div>';
+}
+setInterval(loadIdolImageStatus,5000);
 async function loadTeamIdol(force=false){
  if(!state.participantId||!sharedReady||!["idol","showcase"].includes(state.stage)||idolSyncBusy)return;
  if(idolDirty&&!force)return;
@@ -107,7 +146,8 @@ async function loadShared(){
    save();
    const active=document.activeElement;
    if(!active||!["INPUT","SELECT","TEXTAREA"].includes(active.tagName)||questionChanged){pendingRender=false;render()}
-   if(stageChanged&&["idol","showcase"].includes(d.stage)){idolDirty=false;loadTeamIdol(true)}
+   if(stageChanged&&["idol","showcase"].includes(d.stage)){idolDirty=false;loadTeamIdol(true);loadIdolImageStatus()}
+   if(stageChanged&&d.stage==="showcase"&&tab==="host")loadAdminImages().then(()=>render()).catch(()=>{});
    else pendingRender=true;
   }
  }catch(err){
@@ -273,13 +313,14 @@ function host(){
  +'<p class="muted">관리자가 수정한 문제는 D1에서 불러옵니다. 문항 변경 시 문제 선택 적용을 눌러 주세요.</p><p class="muted">문제 공개 전에는 직원이 답을 제출할 수 없어. 제한시간이 지나면 서버에서도 제출을 거절해.</p></div>'
 
  +'<p class="muted">직원 화면은 약 3초마다 동기화돼. 최근 90초간 접속 확인한 참가 기기를 활성으로 표시해. 누적 등록과 실제 인원은 다를 수 있어.</p></div>'
+ +(state.stage==="showcase"?'<div class="card"><div class="eyebrow">DEBUT SHOWCASE</div><h2>🎤 팀별 아이돌 무대</h2>'+adminImageTeams.map(t=>'<div class="card" style="margin:12px 0"><h3>'+esc(t.name)+' · '+esc(t.project?.group||"준비 중")+'</h3>'+(t.status==="ready"?'<img alt="'+esc(t.name)+' 아이돌 이미지" style="width:100%;border-radius:16px;max-height:420px;object-fit:contain" src="/api/idol/image?teamId='+encodeURIComponent(t.id)+'" />':'<p class="muted">아직 생성된 이미지가 없습니다.</p>')+'<p>'+esc(t.project?.slogan||"")+'</p></div>').join("")+'</div>':"")
  +'<div class="card"><h2>🏆 팀별 현황</h2><p class="muted">총 '+questions.length+'문제 · 팀원별 정답률에 따라 점수를 반영해.</p>'
  +liveTeams.map(t=>'<div class="score"><span><b>'+esc(t.name)+'</b><div class="muted">등록 기록 '+t.participants+'건 · 퀴즈 '+t.quizScore+'점</div></span><b>'+t.score+'점</b></div>').join("")
  +'</div></div>';
 }
 function admin(){
  return '<div class="grid"><div class="card"><h2>⚙️ 관리자 콘솔</h2><label>점수 조정 팀</label><select id="scoreTeam">'+teams.map(t=>'<option>'+t+'</option>').join("")+'</select><label>가감 점수</label><input id="delta" type="number" value="5" min="-100" max="100"><div class="actions"><button id="addScore" class="primary">점수 반영</button></div></div>'
- +questionEditor()+'<div class="card"><h2>📊 데이터 관리</h2><div class="score"><span>누적 참가 등록</span><b>'+participantCount+'건</b></div><div class="score"><span>등록된 팀</span><b>'+registeredTeams+'개</b></div><div class="score"><span>현재 라운드</span><b>'+stageLabel()+'</b></div><p class="muted">테스트 중 중복 참가 기록이 쌓일 수 있어. 아래 초기화는 실제 D1 데이터를 삭제해.</p><button id="resetServer">⚠️ 테스트 참가 기록·점수 전체 초기화</button><button id="export">이 브라우저 데모 JSON 다운로드</button></div></div>';
+ +questionEditor()+idolImageManager()+'<div class="card"><h2>📊 데이터 관리</h2><div class="score"><span>누적 참가 등록</span><b>'+participantCount+'건</b></div><div class="score"><span>등록된 팀</span><b>'+registeredTeams+'개</b></div><div class="score"><span>현재 라운드</span><b>'+stageLabel()+'</b></div><p class="muted">테스트 중 중복 참가 기록이 쌓일 수 있어. 아래 초기화는 실제 D1 데이터를 삭제해.</p><button id="resetServer">⚠️ 테스트 참가 기록·점수 전체 초기화</button><button id="export">이 브라우저 데모 JSON 다운로드</button></div></div>';
 }
 async function loadQuizProgress(){
  if(!state.participantId||!sharedReady)return;
@@ -308,7 +349,7 @@ async function submitQuiz(){
 }
 function render(){if(employeeOnly)tab="play";document.querySelectorAll("[data-tab]").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));view().innerHTML=(tab==="play"?play():tab==="host"?host():admin())+(tab!=="play"?'<div class="actions" style="margin:12px 0"><span class="pill">접속 권한: '+esc(currentRole==="admin"?"관리자":currentRole==="mc"?"사회자":"확인 중")+'</span><button id="roleLogout">🔒 로그아웃 / 역할 전환</button><span class="pill">'+(sharedReady?"🟢 D1 연결":"🔴 D1 확인 필요")+'</span></div>':"");let logout=document.getElementById("roleLogout");if(logout)logout.onclick=logoutRole;let qe=document.getElementById("questionEdit");if(qe)qe.onsubmit=saveQuestion;
 document.querySelectorAll("[data-edit-question]").forEach(b=>b.onclick=()=>{if(document.getElementById("questionEdit")&&!confirm("저장하지 않은 입력 내용은 사라집니다. 다른 문제로 이동할까요?"))return;adminQuestionIndex=Number(b.dataset.editQuestion);render()});
-let rq=document.getElementById("reloadQuestions");if(rq)rq.onclick=async()=>{await loadAdminQuestions();render()};for(const [id,action] of [["addQuizQuestion","add"],["deleteQuizQuestion","delete"],["moveQuestionUp","up"],["moveQuestionDown","down"]]){const b=document.getElementById(id);if(b)b.onclick=()=>manageQuestion(action)};let ai=document.getElementById("generateText");if(ai)ai.onclick=generateIdolText;let j=document.getElementById("join");
+let rq=document.getElementById("reloadQuestions");if(rq)rq.onclick=async()=>{await loadAdminQuestions();render()};let imageRefresh=document.getElementById("refreshImageTeams");if(imageRefresh)imageRefresh.onclick=async()=>{try{await loadAdminImages();render()}catch(e){alert(e.message)}};document.querySelectorAll("[data-image-team]").forEach(b=>b.onclick=()=>generateTeamImage(b.dataset.imageTeam));for(const [id,action] of [["addQuizQuestion","add"],["deleteQuizQuestion","delete"],["moveQuestionUp","up"],["moveQuestionDown","down"]]){const b=document.getElementById(id);if(b)b.onclick=()=>manageQuestion(action)};let ai=document.getElementById("generateText");if(ai)ai.onclick=generateIdolText;let j=document.getElementById("join");
 if(j)j.onsubmit=async ev=>{
  ev.preventDefault();
  const f=new FormData(j),name=String(f.get("name")||"").trim(),teamName=String(f.get("team")||"");
@@ -360,5 +401,5 @@ document.querySelectorAll("[data-word]").forEach(b=>b.onclick=()=>{if(!sharedRea
   state=fresh();save();lastRevision=-1;await loadShared();alert("테스트 데이터 초기화 완료. 참가자 기기에서도 재입장해 주세요.");
  }catch(e){alert(e.message)}
 };let x=document.getElementById("export");if(x)x.onclick=()=>{let u=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:"application/json"})),a=document.createElement("a");a.href=u;a.download="kpec-demo-state.json";a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}}
-render();loadShared().then(async()=>{await loadQuizProgress();await loadTeamIdol(true)});heartbeat();
+render();loadShared().then(async()=>{await loadQuizProgress();await loadTeamIdol(true);await loadIdolImageStatus()});heartbeat();
 </script></body></html>
